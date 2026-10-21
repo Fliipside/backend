@@ -6,3 +6,4 @@ __pycache__/
 .env
 .local_agent_docs/
 sample.txt
+.vscode/

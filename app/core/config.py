@@ -1,17 +1,73 @@
 from functools import lru_cache
 
+from dotenv import find_dotenv, load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Self
+from pydantic import SecretStr, model_validator
+from sqlalchemy import URL
+
+
+def load_environment() -> None:
+    env_file = find_dotenv(usecwd=True)
+    if env_file:
+        load_dotenv(env_file, override=False)
+
+
+load_environment()
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore")
 
     app_name: str = "Flipside API"
     api_v1_prefix: str = "/api/v1"
-    database_url: str = ""
+    postgres_host: str = ""
+    postgres_port: int = 5432
+    postgres_db: str = ""
+    postgres_user: str = ""
+    postgres_password: SecretStr = SecretStr("")
     redis_url: str = ""
     ai_service_url: str = ""
 
+    
+    @model_validator(mode="after")
+    def validate_postgres_settings(self) -> Self:
+        values = {
+            "POSTGRES_HOST": self.postgres_host,
+            "POSTGRES_DB": self.postgres_db,
+            "POSTGRES_USER": self.postgres_user,
+            "POSTGRES_PASSWORD": self.postgres_password.get_secret_value(),
+        }
+
+        if any(values.values()) and not all(values.values()):
+            missing = [name for name, value in values.items() if not value]
+            raise ValueError(
+                f"Incomplete PostgreSQL configuration: {', '.join(missing)}"
+            )
+        return self
+
+    @property
+    def database_url(self) -> URL | None:
+        password = self.postgres_password.get_secret_value()
+
+        if not any(
+            (
+                self.postgres_host,
+                self.postgres_db,
+                self.postgres_user,
+                password,
+            )
+        ):
+            return None
+
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.postgres_user,
+            password=password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        )
 
 @lru_cache
 def get_settings() -> Settings:
