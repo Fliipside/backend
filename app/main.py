@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.api.v1.router import router as api_router
 from app.core.config import Settings, get_settings
 from app.core.errors import FeatureNotReadyError
+from app.db.session import verify_database_connection
 
 
 @asynccontextmanager
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         if settings.database_url:
             engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+            await verify_database_connection(engine)
         if settings.redis_url:
             redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
         if settings.ai_service_url:

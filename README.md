@@ -32,16 +32,16 @@ python -m pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-`/docs`에서 API 문서를 볼 수 있습니다. `.env.example`을 참고해 필요한 환경 변수를 설정합니다. `DATABASE_URL`은 SQLAlchemy용 `postgresql+asyncpg://...` 형식입니다. `REDIS_URL`과 `AI_SERVICE_URL`도 실제 연동 시 설정합니다. `.env`는 Git에 포함하지 않습니다.
+`.env.example`을 참고해 `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`를 설정합니다. 서버는 이 값으로 PostgreSQL 연결 URL을 구성합니다.
 
 ## 현재 API 상태
 
-| 경로 | 임시 입력 | 현재 동작 |
-| --- | --- | --- |
-| `GET /health` | 없음 | 서버 프로세스 생존 확인, 200 |
-| `POST /api/v1/voice/infer` | `file` 오디오 업로드 | 501 |
-| `POST /api/v1/emotion/infer` | `{"text":"..."}` | 501 |
-| `POST /api/v1/relationship/infer` | `{"messages":[{"speaker":"A","text":"..."}]}` | 501 |
+| 경로                              | 임시 입력                                     | 현재 동작                    |
+| --------------------------------- | --------------------------------------------- | ---------------------------- |
+| `GET /health`                     | 없음                                          | 서버 프로세스 생존 확인, 200 |
+| `POST /api/v1/voice/infer`        | `file` 오디오 업로드                          | 501                          |
+| `POST /api/v1/emotion/infer`      | `{"text":"..."}`                              | 501                          |
+| `POST /api/v1/relationship/infer` | `{"messages":[{"speaker":"A","text":"..."}]}` | 501                          |
 
 `/health`는 DB·Redis 연결 상태를 보증하지 않습니다. 세 `infer` 경로의 입력은 임시 계약이고, 결과를 반환하는 기능은 아직 없습니다. 각 기능을 구현할 때 입력·출력 스키마를 확정하고, 필요한 repository와 외부 서비스 호출을 연결하세요. 인증/JWT, 실제 저장 스키마, pgvector 마이그레이션, 파일 저장 방식도 아직 구현되지 않았습니다.
 
