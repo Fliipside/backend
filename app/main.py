@@ -11,6 +11,7 @@ from app.api.v1.router import router as api_router
 from app.core.config import Settings, get_settings
 from app.core.errors import FeatureNotReadyError
 from app.db.session import verify_database_connection
+from app.middleware.request_logging import register_request_logging_middleware
 
 
 @asynccontextmanager
@@ -47,6 +48,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.settings = settings
+
+    register_request_logging_middleware(app)
 
     @app.exception_handler(FeatureNotReadyError)
     async def feature_not_ready_handler(
