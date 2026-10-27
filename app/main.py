@@ -9,9 +9,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.router import router as api_router
 from app.core.config import Settings, get_settings
-from app.core.errors import FeatureNotReadyError
+from app.core.errors import (
+    AIServiceBadResponseError,
+    AIServiceConnectionError,
+    AIServiceTimeoutError,
+    AIServiceUpstreamError,
+    FeatureNotReadyError,
+)
 from app.db.session import verify_database_connection
 from app.middleware.request_logging import register_request_logging_middleware
+from app.clients.ai import AIServiceClient
 
 
 @asynccontextmanager
@@ -20,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = None
     redis_client = None
     ai_client = None
+    ai_http_client = None
     try:
         if settings.database_url:
             engine = create_async_engine(settings.database_url, pool_pre_ping=True)
@@ -27,7 +35,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.redis_url:
             redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
         if settings.ai_service_url:
-            ai_client = httpx.AsyncClient(base_url=settings.ai_service_url, timeout=30.0)
+            ai_http_client = httpx.AsyncClient(
+                base_url=settings.ai_service_url, 
+                timeout=settings.ai_service_timeout_seconds,
+                )
+            ai_client = AIServiceClient(ai_http_client)
 
         app.state.db_sessionmaker = (
             async_sessionmaker(engine, expire_on_commit=False) if engine else None
@@ -36,8 +48,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.ai_client = ai_client
         yield
     finally:
-        if ai_client is not None:
-            await ai_client.aclose()
+        if ai_http_client is not None:
+            await ai_http_client.aclose()
         if redis_client is not None:
             await redis_client.aclose()
         if engine is not None:
@@ -53,9 +65,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(FeatureNotReadyError)
     async def feature_not_ready_handler(
-        request: Request, exc: FeatureNotReadyError
+        request: Request, 
+        exc: FeatureNotReadyError
     ) -> JSONResponse:
         return JSONResponse(status_code=501, content={"detail": str(exc)})
+
+    @app.exception_handler(AIServiceConnectionError)
+    async def ai_connection_error_handler(
+        request: Request,
+        exc: AIServiceConnectionError,
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": "AI service is unavailable"})
+
+    @app.exception_handler(AIServiceTimeoutError)
+    async def ai_timeout_error_handler(
+        request: Request,
+        exc: AIServiceTimeoutError,
+    ) -> JSONResponse:
+        return JSONResponse(status_code=504, content={"detail": "AI service request timed out"})
+
+    @app.exception_handler(AIServiceUpstreamError)
+    async def ai_upstream_error_handler(
+        request: Request,
+        exc: AIServiceUpstreamError,
+    ) -> JSONResponse:
+        return JSONResponse(status_code=502, content={"detail": "AI service returned an error"})
+
+    @app.exception_handler(AIServiceBadResponseError)
+    async def ai_bad_response_error_handler(
+        request: Request,
+        exc: AIServiceBadResponseError,
+    ) -> JSONResponse:
+        return JSONResponse(status_code=502, content={"detail": "AI service returned an invalid response"})
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:

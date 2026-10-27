@@ -1,9 +1,9 @@
 from functools import lru_cache
+from typing import Self
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Self
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from sqlalchemy import URL
 
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     postgres_password: SecretStr = SecretStr("")
     redis_url: str = ""
     ai_service_url: str = ""
+    ai_service_timeout_seconds: float = Field(default=30.0, gt=0)
 
     
     @model_validator(mode="after")
