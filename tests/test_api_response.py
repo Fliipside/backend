@@ -39,22 +39,37 @@ def test_health_response(client: TestClient) -> None:
 
 def test_feature_not_ready_response(client: TestClient) -> None:
     response = client.post(
-        "/api/v1/emotion/infer",
-        json={"text": "hello"},
+        "/api/v1/relationship/infer",
+        json={"messages": [{"speaker": "A", "text": "hello"}]},
     )
 
     assert response.status_code == 501
     assert response.json() == {
         "success": False,
         "code": "FEATURE_NOT_READY",
-        "message": "emotion API workflow is not implemented yet",
+        "message": "relationship API workflow is not implemented yet",
+        "data": None,
+    }
+
+
+def test_ai_service_not_configured_response(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/emotion/infer",
+        json={"text": "hello"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "success": False,
+        "code": "SERVICE_UNAVAILABLE",
+        "message": "AI service is not configured",
         "data": None,
     }
 
 
 def test_validation_error_response(client: TestClient) -> None:
     response = client.post(
-        "/api/v1/emotion/infer",
+        "/api/v1/relationship/infer",
         json={},
     )
 

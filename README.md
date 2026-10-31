@@ -12,9 +12,9 @@ app/
 │   └── v1/             # 버전별 HTTP 라우터
 ├── schemas/            # 요청과 응답의 데이터 계약
 ├── services/           # 기능별 서버 워크플로 조합
-├── repositories/       # PostgreSQL 조회 및 저장 (기능 구현 시 추가)
+├── repositories/       # PostgreSQL 조회 및 저장
 ├── db/                 # SQLAlchemy 기반 및 세션
-└── core/               # 환경 설정과 공통 오류
+└── core/               # 환경 설정, 공통 오류, 인증 보안
 ```
 
 라우터는 HTTP 입력·출력을 처리하고, 서비스는 DB·Redis·외부 AI 호출을 조합합니다. SQL 쿼리는 `repositories/`에 둡니다. PostgreSQL이 원본 서비스 데이터의 저장소이며, 관계 분석의 임베딩과 유사도 검색은 **같은 PostgreSQL의 pgvector 확장**을 사용합니다. 벡터 차원, 테이블, 인덱스, 마이그레이션은 실제 임베딩 모델과 데이터 요구사항이 정해지면 추가합니다.
@@ -32,18 +32,21 @@ python -m pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-`.env.example`을 참고해 `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`를 설정합니다. 서버는 이 값으로 PostgreSQL 연결 URL을 구성합니다.
+`.env.example`을 참고해 `.env`를 만듭니다. 인증 API를 쓰려면 PostgreSQL 설정과 32바이트 이상의 무작위 `JWT_SECRET_KEY`가 필요합니다. 예를 들어 `python -c "import secrets; print(secrets.token_urlsafe(32))"`로 생성할 수 있습니다. 테이블은 `alembic upgrade head`로 생성합니다.
 
 ## 현재 API 상태
 
-| 경로                              | 임시 입력                                     | 현재 동작                    |
-| --------------------------------- | --------------------------------------------- | ---------------------------- |
-| `GET /health`                     | 없음                                          | 서버 프로세스 생존 확인, 200 |
-| `POST /api/v1/voice/infer`        | `file` 오디오 업로드                          | 501                          |
-| `POST /api/v1/emotion/infer`      | `{"text":"..."}`                              | 501                          |
-| `POST /api/v1/relationship/infer` | `{"messages":[{"speaker":"A","text":"..."}]}` | 501                          |
+| 경로                              | 설명                                  |
+| --------------------------------- | ------------------------------------- |
+| `GET /health`                     | 서버 프로세스 생존 확인 (DB·Redis 상태는 확인하지 않음) |
+| `POST /api/v1/auth/signup`        | 회원가입 (`email`, `password`, `nickname`) |
+| `POST /api/v1/auth/login`         | 로그인, access token 발급             |
+| `GET /api/v1/auth/me`             | 내 정보 조회 (`Authorization: Bearer <token>`) |
+| `POST /api/v1/emotion/infer`      | 외부 AI 서비스로 감정 분석 요청       |
+| `POST /api/v1/voice/infer`        | 미구현 (501)                          |
+| `POST /api/v1/relationship/infer` | 미구현 (501)                          |
 
-`/health`는 DB·Redis 연결 상태를 보증하지 않습니다. 세 `infer` 경로의 입력은 임시 계약이고, 결과를 반환하는 기능은 아직 없습니다. 각 기능을 구현할 때 입력·출력 스키마를 확정하고, 필요한 repository와 외부 서비스 호출을 연결하세요. 인증/JWT, 실제 저장 스키마, pgvector 마이그레이션, 파일 저장 방식도 아직 구현되지 않았습니다.
+인증이 필요한 API는 `app/api/deps.py`의 `get_current_user` 의존성을 사용합니다.
 
 ## Docker
 
