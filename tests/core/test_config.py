@@ -1,9 +1,14 @@
 import os
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 from pytest import MonkeyPatch
 
 from app.core.config import load_environment, Settings
+
+
+VALID_JWT_SECRET_KEY = "test-secret-key-with-enough-length-1234"
 
 
 def test_load_environment_finds_parent_env_file(
@@ -27,6 +32,7 @@ def test_settings_build_database_url() -> None:
         postgres_db="flipside",
         postgres_user="test_user",
         postgres_password="p@ss:/word",
+        jwt_secret_key=VALID_JWT_SECRET_KEY,
     )
 
     database_url = settings.database_url
@@ -38,3 +44,14 @@ def test_settings_build_database_url() -> None:
     assert database_url.database == "flipside"
     assert database_url.username == "test_user"
     assert database_url.password == "p@ss:/word"
+
+
+def test_settings_rejects_short_jwt_secret_key() -> None:
+    with pytest.raises(ValidationError, match="at least 32 bytes"):
+        Settings(jwt_secret_key="a" * 31)
+
+
+def test_settings_allows_unconfigured_jwt_secret_key() -> None:
+    settings = Settings(jwt_secret_key="")
+
+    assert settings.jwt_secret_key.get_secret_value() == ""

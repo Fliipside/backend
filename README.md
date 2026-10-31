@@ -32,7 +32,7 @@ python -m pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-`.env.example`을 참고해 `.env`를 만듭니다. 인증 API를 쓰려면 PostgreSQL 설정과 `JWT_SECRET_KEY`가 필요하며, 테이블은 `alembic upgrade head`로 생성합니다.
+`.env.example`을 참고해 `.env`를 만듭니다. 인증 API를 쓰려면 PostgreSQL 설정과 32바이트 이상의 무작위 `JWT_SECRET_KEY`가 필요합니다. 예를 들어 `python -c "import secrets; print(secrets.token_urlsafe(32))"`로 생성할 수 있습니다. 테이블은 `alembic upgrade head`로 생성합니다.
 
 ## 현재 API 상태
 

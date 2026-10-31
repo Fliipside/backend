@@ -3,7 +3,7 @@ from typing import Self
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from sqlalchemy import URL
 
 
@@ -33,7 +33,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = Field(default=60, gt=0)
 
-    
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def validate_jwt_secret_key(cls, secret_key: SecretStr) -> SecretStr:
+        value = secret_key.get_secret_value()
+        if value and len(value.encode("utf-8")) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 bytes")
+        return secret_key
+
     @model_validator(mode="after")
     def validate_postgres_settings(self) -> Self:
         values = {

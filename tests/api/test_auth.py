@@ -1,5 +1,6 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.main import create_app
 from app.models.user import User
+from app.services import auth as auth_service
 
 
 SIGNUP_PAYLOAD = {
@@ -115,6 +117,39 @@ def test_login_rejects_unknown_email(client: TestClient) -> None:
 
     assert response.status_code == 401
     assert response.json()["code"] == "INVALID_CREDENTIALS"
+
+
+def test_password_work_uses_threadpool(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Callable[..., Any]] = []
+    original_run_in_threadpool = auth_service.run_in_threadpool
+
+    async def recording_run_in_threadpool(
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        calls.append(func)
+        return await original_run_in_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr(
+        auth_service,
+        "run_in_threadpool",
+        recording_run_in_threadpool,
+    )
+
+    signup_response = client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "user@example.com", "password": "password1234"},
+    )
+
+    assert signup_response.status_code == 201
+    assert login_response.status_code == 200
+    assert auth_service.hash_password in calls
+    assert auth_service.verify_password in calls
 
 
 def test_me_requires_token(client: TestClient) -> None:

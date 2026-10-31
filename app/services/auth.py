@@ -1,5 +1,6 @@
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.core.errors import (
@@ -27,11 +28,12 @@ async def signup(session: AsyncSession, request: SignupRequest) -> User:
     if await user_repository.get_user_by_email(session, email) is not None:
         raise EmailAlreadyExistsError
 
+    password_hash = await run_in_threadpool(hash_password, request.password)
     try:
         user = await user_repository.create_user(
             session,
             email=email,
-            password_hash=hash_password(request.password),
+            password_hash=password_hash,
             nickname=request.nickname,
         )
         await session.commit()
@@ -52,9 +54,18 @@ async def login(
         normalize_email(request.email),
     )
     if user is None:
-        verify_password(request.password, DUMMY_PASSWORD_HASH)
+        await run_in_threadpool(
+            verify_password,
+            request.password,
+            DUMMY_PASSWORD_HASH,
+        )
         raise InvalidCredentialsError
-    if not verify_password(request.password, user.password_hash):
+    password_matches = await run_in_threadpool(
+        verify_password,
+        request.password,
+        user.password_hash,
+    )
+    if not password_matches:
         raise InvalidCredentialsError
     if not user.is_active:
         raise InactiveUserError
