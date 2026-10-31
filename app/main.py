@@ -107,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 code=exc.code,
                 message=exc.message,
             ),
+            headers=exc.headers,
         )
 
     @app.exception_handler(AIServiceConnectionError)
