@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -119,25 +120,25 @@ def test_login_rejects_unknown_email(client: TestClient) -> None:
     assert response.json()["code"] == "INVALID_CREDENTIALS"
 
 
-def test_password_work_uses_threadpool(
+def test_password_work_uses_dedicated_limiter(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[Callable[..., Any]] = []
-    original_run_in_threadpool = auth_service.run_in_threadpool
+    original_run_password_operation = auth_service.run_password_operation
 
-    async def recording_run_in_threadpool(
+    async def recording_run_password_operation(
         func: Callable[..., Any],
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         calls.append(func)
-        return await original_run_in_threadpool(func, *args, **kwargs)
+        return await original_run_password_operation(func, *args, **kwargs)
 
     monkeypatch.setattr(
         auth_service,
-        "run_in_threadpool",
-        recording_run_in_threadpool,
+        "run_password_operation",
+        recording_run_password_operation,
     )
 
     signup_response = client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
@@ -145,11 +146,38 @@ def test_password_work_uses_threadpool(
         "/api/v1/auth/login",
         json={"email": "user@example.com", "password": "password1234"},
     )
+    unknown_user_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "nobody@example.com", "password": "password1234"},
+    )
 
     assert signup_response.status_code == 201
     assert login_response.status_code == 200
-    assert auth_service.hash_password in calls
-    assert auth_service.verify_password in calls
+    assert unknown_user_response.status_code == 401
+    assert calls.count(auth_service.hash_password) == 1
+    assert calls.count(auth_service.verify_password) == 2
+    assert auth_service.PASSWORD_HASH_LIMITER.total_tokens == 2
+
+
+def test_password_operation_passes_dedicated_limiter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_limiter: list[object] = []
+
+    async def fake_run_sync(
+        func: Callable[[], Any],
+        *,
+        limiter: object,
+    ) -> Any:
+        received_limiter.append(limiter)
+        return func()
+
+    monkeypatch.setattr(auth_service.to_thread, "run_sync", fake_run_sync)
+
+    result = asyncio.run(auth_service.run_password_operation(lambda: "done"))
+
+    assert result == "done"
+    assert received_limiter == [auth_service.PASSWORD_HASH_LIMITER]
 
 
 def test_me_requires_token(client: TestClient) -> None:
