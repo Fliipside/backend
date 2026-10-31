@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     redis_url: str = ""
     ai_service_url: str = ""
     ai_service_timeout_seconds: float = Field(default=30.0, gt=0)
+    jwt_secret_key: SecretStr = SecretStr("")
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = Field(default=60, gt=0)
 
     
     @model_validator(mode="after")
