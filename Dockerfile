@@ -3,6 +3,7 @@ FROM python:3.11-slim
 WORKDIR /code
 COPY pyproject.toml ./
 COPY app ./app
+COPY .env ./.env
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000
