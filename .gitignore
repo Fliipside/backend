@@ -8,3 +8,4 @@ __pycache__/
 sample.txt
 .vscode/
 .DS_Store
+backend/
