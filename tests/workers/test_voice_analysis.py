@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -135,26 +136,25 @@ def test_without_voiceprint_omits_form_field(sessionmaker) -> None:
     asyncio.run(run_test())
 
 
-def test_result_without_me_is_stored_with_letter_speakers(sessionmaker) -> None:
+def test_result_without_me_is_stored_as_ai_returned(sessionmaker) -> None:
     async def run_test() -> None:
         storage = FakeObjectStorage()
         job_id = await seed(sessionmaker, storage, with_voiceprint=False)
         data = {
             "speakers": [
-                {"speaker": "speaker_1", "role": "unknown", "speech_seconds": 3.0},
-                {"speaker": "speaker_2", "role": "unknown", "speech_seconds": 2.0},
+                {"speaker": "A", "role": "unknown", "speech_seconds": 3.0},
+                {"speaker": "B", "role": "unknown", "speech_seconds": 2.0},
             ],
             "utterances": [
-                {"start": 0.0, "end": 1.0, "speaker": "speaker_1", "role": "unknown", "text": "안녕하세요"},
-                {"start": 1.5, "end": 2.0, "speaker": "speaker_2", "role": "unknown", "text": "네"},
+                {"start": 0.0, "end": 1.0, "speaker": "A", "role": "unknown", "text": "안녕하세요"},
+                {"start": 1.5, "end": 2.0, "speaker": "B", "role": "unknown", "text": "네"},
             ],
         }
 
         await make_worker(sessionmaker, storage, FakeAIClient(ai_ok(data))).process(job_id)
 
         job = await load(sessionmaker, job_id)
-        assert [s["speaker"] for s in job.result["speakers"]] == ["A", "B"]
-        assert [u["speaker"] for u in job.result["utterances"]] == ["A", "B"]
+        assert job.result == data
 
     asyncio.run(run_test())
 
@@ -166,6 +166,9 @@ def test_result_without_me_is_stored_with_letter_speakers(sessionmaker) -> None:
         (AIServiceUpstreamError(429, "STT_RATE_LIMITED"), 10.0, "STT_RATE_LIMITED"),
         (AIServiceUpstreamError(502, "STT_FAILED"), 10.0, "STT_FAILED"),
         (AIServiceUpstreamError(503, None), 10.0, "AI_SERVICE_UNAVAILABLE"),
+        (AIServiceUpstreamError(503, None, 30.0), 30.0, "AI_SERVICE_UNAVAILABLE"),
+        (AIServiceUpstreamError(503, "VOICE_BUSY", 60.0), 60.0, "VOICE_BUSY"),
+        (AIServiceUpstreamError(503, "VOICE_BUSY"), 10.0, "VOICE_BUSY"),
         (AIServiceConnectionError(), 10.0, "AI_SERVICE_UNAVAILABLE"),
     ],
 )
@@ -190,8 +193,11 @@ def test_retryable_errors_requeue_job(sessionmaker, error, expected_delay, expec
     [
         (AIServiceUpstreamError(400, "INVALID_AUDIO"), "INVALID_AUDIO"),
         (AIServiceUpstreamError(400, "VOICEPRINT_ENGINE_MISMATCH"), "VOICEPRINT_ENGINE_MISMATCH"),
+        (AIServiceUpstreamError(400, "AUDIO_TOO_LONG"), "AUDIO_TOO_LONG"),
         (AIServiceUpstreamError(503, "STT_NOT_CONFIGURED"), "STT_NOT_CONFIGURED"),
         (AIServiceUpstreamError(503, "DIARIZATION_NOT_CONFIGURED"), "DIARIZATION_NOT_CONFIGURED"),
+        (AIServiceUpstreamError(503, "FFMPEG_NOT_CONFIGURED"), "FFMPEG_NOT_CONFIGURED"),
+        (AIServiceUpstreamError(400, "INVALID_REQUEST"), "INVALID_REQUEST"),
         (AIServiceUpstreamError(501, "FEATURE_NOT_READY"), "FEATURE_NOT_READY"),
         (AIServiceTimeoutError(), "AI_SERVICE_TIMEOUT"),
         ({"success": True, "data": {"speakers": "bad"}}, "AI_SERVICE_BAD_RESPONSE"),
@@ -244,6 +250,57 @@ def test_last_retryable_attempt_fails_job(sessionmaker) -> None:
         assert job.status == "failed"
         assert job.attempts == 3
         assert job.error_code == "STT_FAILED"
+
+    asyncio.run(run_test())
+
+
+def test_busy_ai_does_not_use_up_attempts(sessionmaker) -> None:
+    async def run_test() -> None:
+        storage = FakeObjectStorage()
+        job_id = await seed(sessionmaker, storage, attempts=2)
+        error = AIServiceUpstreamError(503, "VOICE_BUSY", 60.0)
+
+        outcome = await make_worker(sessionmaker, storage, FakeAIClient(error)).process(job_id)
+
+        assert outcome.retry_after_seconds == 60.0
+        job = await load(sessionmaker, job_id)
+        assert job.status == "queued"
+        assert job.attempts == 2
+        assert job.error_code == "VOICE_BUSY"
+        assert job.error_message
+
+    asyncio.run(run_test())
+
+
+def test_busy_ai_fails_after_max_wait(sessionmaker) -> None:
+    async def run_test() -> None:
+        storage = FakeObjectStorage()
+        started_at = datetime.now(UTC) - timedelta(hours=2)
+        job_id = await seed(sessionmaker, storage, attempts=1, started_at=started_at)
+        error = AIServiceUpstreamError(503, "VOICE_BUSY", 60.0)
+
+        outcome = await make_worker(sessionmaker, storage, FakeAIClient(error)).process(job_id)
+
+        assert outcome.retry_after_seconds is None
+        job = await load(sessionmaker, job_id)
+        assert job.status == "failed"
+        assert job.attempts == 1
+        assert job.error_code == "VOICE_BUSY"
+
+    asyncio.run(run_test())
+
+
+def test_audio_too_long_has_dedicated_message(sessionmaker) -> None:
+    async def run_test() -> None:
+        storage = FakeObjectStorage()
+        job_id = await seed(sessionmaker, storage)
+        error = AIServiceUpstreamError(400, "AUDIO_TOO_LONG")
+
+        await make_worker(sessionmaker, storage, FakeAIClient(error)).process(job_id)
+
+        job = await load(sessionmaker, job_id)
+        assert job.status == "failed"
+        assert job.error_message == "녹음이 60분을 넘어 분석할 수 없습니다."
 
     asyncio.run(run_test())
 

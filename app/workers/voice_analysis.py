@@ -37,7 +37,6 @@ from app.schemas.voice import VoiceAnalysisResult
 from app.services.voice import (
     AI_ANALYZE_PATH,
     VOICE_ANALYSIS_QUEUE,
-    label_speakers_without_me,
     unwrap_ai_data,
 )
 
@@ -46,9 +45,15 @@ logger = logging.getLogger(__name__)
 
 DEQUEUE_TIMEOUT_SECONDS = 5.0
 RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
+# ai refused because another analysis is still running (e.g. the one this worker
+# sent before it restarted). Nothing was analyzed, so the attempt is not counted.
+BUSY_CODES = frozenset({"VOICE_BUSY"})
 
 ERROR_MESSAGES = {
     "INVALID_AUDIO": "음성 파일을 분석할 수 없습니다.",
+    "AUDIO_TOO_LONG": "녹음이 60분을 넘어 분석할 수 없습니다.",
+    # Shown while waiting, and kept if the busy wait limit is reached.
+    "VOICE_BUSY": "AI 서비스가 다른 분석을 처리하고 있어 아직 분석을 시작하지 못했습니다.",
     "VOICEPRINT_ENGINE_MISMATCH": "등록된 목소리가 현재 분석 엔진과 맞지 않습니다. 목소리를 다시 등록해 주세요.",
     "STT_RATE_LIMITED": "음성 인식 사용량 한도에 걸려 분석하지 못했습니다.",
     "STT_FAILED": "음성 인식에 실패했습니다.",
@@ -69,6 +74,7 @@ class JobFailure:
     code: str
     retryable: bool
     retry_after_seconds: float | None = None
+    counts_attempt: bool = True
 
     @property
     def message(self) -> str:
@@ -87,6 +93,13 @@ class JobOutcome:
 def classify_error(exc: Exception) -> JobFailure:
     if isinstance(exc, AIServiceUpstreamError):
         code = exc.code or "AI_SERVICE_ERROR"
+        if code in BUSY_CODES:
+            return JobFailure(
+                code,
+                retryable=True,
+                retry_after_seconds=exc.retry_after_seconds,
+                counts_attempt=False,
+            )
         if exc.status_code == 429:
             return JobFailure(
                 exc.code or "STT_RATE_LIMITED",
@@ -97,7 +110,11 @@ def classify_error(exc: Exception) -> JobFailure:
             return JobFailure(code, retryable=False)
         if exc.status_code in RETRYABLE_STATUS_CODES:
             # Without an ai error code this is usually a proxy or a stopped ai container.
-            return JobFailure(exc.code or "AI_SERVICE_UNAVAILABLE", retryable=True)
+            return JobFailure(
+                exc.code or "AI_SERVICE_UNAVAILABLE",
+                retryable=True,
+                retry_after_seconds=exc.retry_after_seconds,
+            )
         return JobFailure(code, retryable=False)
     if isinstance(exc, AIServiceConnectionError):
         return JobFailure("AI_SERVICE_UNAVAILABLE", retryable=True)
@@ -115,6 +132,14 @@ def classify_error(exc: Exception) -> JobFailure:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _elapsed_seconds(since: datetime | None) -> float:
+    if since is None:
+        return 0.0
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    return (_now() - since).total_seconds()
 
 
 class VoiceAnalysisWorker:
@@ -256,8 +281,7 @@ class VoiceAnalysisWorker:
                 data=form,
                 timeout=self._settings.ai_analyze_timeout_seconds,
             )
-        result = VoiceAnalysisResult.model_validate(unwrap_ai_data(payload))
-        return label_speakers_without_me(result)
+        return VoiceAnalysisResult.model_validate(unwrap_ai_data(payload))
 
     async def _record_failure(
             self,
@@ -266,11 +290,23 @@ class VoiceAnalysisWorker:
             attempt: int,
     ) -> JobOutcome:
         settings = self._settings
-        retry = failure.retryable and attempt < settings.voice_analysis_max_attempts
+        if not failure.counts_attempt:
+            # attempts was raised before the ai call; nothing ran, so give it back.
+            attempt -= 1
         async with self._sessionmaker() as session:
             job = await voice_repository.get_voice_analysis_job(session, job_id)
             if job is None:
                 return JobOutcome()
+            if failure.counts_attempt:
+                retry = failure.retryable and attempt < settings.voice_analysis_max_attempts
+            else:
+                # Busy is normally short (the ai finishes its current analysis), but
+                # stop waiting if it never frees up.
+                retry = failure.retryable and (
+                    _elapsed_seconds(job.started_at)
+                    < settings.voice_analysis_busy_max_wait_seconds
+                )
+            job.attempts = attempt
             if retry:
                 job.status = VoiceAnalysisStatus.QUEUED
                 job.error_code = failure.code
@@ -283,7 +319,7 @@ class VoiceAnalysisWorker:
             return JobOutcome()
         delay = failure.retry_after_seconds
         if delay is None:
-            delay = settings.voice_analysis_retry_base_seconds * 2 ** (attempt - 1)
+            delay = settings.voice_analysis_retry_base_seconds * 2 ** max(attempt - 1, 0)
         return JobOutcome(retry_after_seconds=delay)
 
     @staticmethod

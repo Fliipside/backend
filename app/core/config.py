@@ -36,10 +36,11 @@ class Settings(BaseSettings):
     s3_bucket: str = ""
     s3_access_key_id: str = ""
     s3_secret_access_key: SecretStr = SecretStr("")
-    voice_recording_max_bytes: int = Field(default=200 * 1024 * 1024, gt=0)
+    voice_recording_max_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
     voice_enroll_max_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
     voice_analysis_max_attempts: int = Field(default=3, gt=0)
     voice_analysis_retry_base_seconds: float = Field(default=30.0, gt=0)
+    voice_analysis_busy_max_wait_seconds: float = Field(default=3600.0, gt=0)
     jwt_secret_key: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = Field(default=60, gt=0)

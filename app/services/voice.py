@@ -31,7 +31,6 @@ from app.models.voice import VOICEPRINT_DIMENSIONS, VoiceAnalysisJob, VoiceAnaly
 from app.repositories import voice as voice_repository
 from app.schemas.voice import (
     AIVoiceprint,
-    VoiceAnalysisResult,
     VoiceAnalysisCreateResponse,
     VoiceAnalysisResponse,
     VoiceEnrollResponse,
@@ -187,44 +186,6 @@ def to_voice_analysis_response(job: VoiceAnalysisJob) -> VoiceAnalysisResponse:
         started_at=job.started_at,
         finished_at=job.finished_at,
     )
-
-
-ME_SPEAKER = "me"
-
-
-def speaker_letters(index: int) -> str:
-    """0 -> A, 25 -> Z, 26 -> AA, like spreadsheet columns."""
-    letters = ""
-    index += 1
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        letters = chr(ord("A") + remainder) + letters
-    return letters
-
-
-def label_speakers_without_me(result: VoiceAnalysisResult) -> VoiceAnalysisResult:
-    """Without a "me" speaker, rename speakers to A, B, C... in order of first utterance."""
-    if any(speaker.speaker == ME_SPEAKER for speaker in result.speakers):
-        return result
-
-    order: list[str] = []
-    for utterance in sorted(result.utterances, key=lambda item: item.start):
-        if utterance.speaker not in order:
-            order.append(utterance.speaker)
-    for speaker in result.speakers:
-        if speaker.speaker not in order:
-            order.append(speaker.speaker)
-    labels = {name: speaker_letters(index) for index, name in enumerate(order)}
-
-    speakers = [
-        speaker.model_copy(update={"speaker": labels[speaker.speaker]})
-        for speaker in sorted(result.speakers, key=lambda item: order.index(item.speaker))
-    ]
-    utterances = [
-        utterance.model_copy(update={"speaker": labels[utterance.speaker]})
-        for utterance in result.utterances
-    ]
-    return VoiceAnalysisResult(speakers=speakers, utterances=utterances)
 
 
 def build_recording_key(user_id: UUID, job_id: UUID, filename: str) -> str:

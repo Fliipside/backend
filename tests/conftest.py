@@ -10,11 +10,11 @@ VOICEPRINT = {"engine": "pyannote", "vector": [0.25] * 256}
 ANALYSIS_DATA = {
     "speakers": [
         {"speaker": "me", "role": "me", "speech_seconds": 12.5},
-        {"speaker": "speaker_1", "role": "customer", "speech_seconds": 8.0},
+        {"speaker": "A", "role": "customer", "speech_seconds": 8.0},
     ],
     "utterances": [
         {"start": 0.0, "end": 2.5, "speaker": "me", "role": "me", "text": "안녕하세요"},
-        {"start": 2.6, "end": 4.0, "speaker": "speaker_1", "role": "customer", "text": "네"},
+        {"start": 2.6, "end": 4.0, "speaker": "A", "role": "customer", "text": "네"},
     ],
 }
 

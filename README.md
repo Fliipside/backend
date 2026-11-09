@@ -38,8 +38,11 @@ app/
 
 - **작업 상태와 결과**는 PostgreSQL `voice_analysis_jobs` 테이블이 원본입니다. Redis에는 job_id만 들어갑니다.
 - **Redis 키** (`flipside:voice-analysis:*`): `pending`(대기 목록), `processing`(처리 중), `delayed`(재시도 대기, sorted set). 처리가 끝나면 키에서 빠지므로 만료(TTL)를 두지 않습니다. 워커는 시작할 때 `processing`에 남은 작업을 되돌리고, DB에서 끝나지 않은 작업 중 Redis에 없는 작업을 다시 넣습니다.
-- **재시도**: ai 429(`Retry-After` 우선), 502, 503(`*_NOT_CONFIGURED` 제외), 504, 연결 실패, 저장소 오류. 최대 `VOICE_ANALYSIS_MAX_ATTEMPTS`회, 간격은 `VOICE_ANALYSIS_RETRY_BASE_SECONDS × 2^(시도-1)`입니다. ai 호출 timeout은 재시도하지 않습니다.
-- **화자 이름**: 결과에 `me`가 없으면(목소리 미등록 또는 "나"를 찾지 못함) 화자를 처음 말한 순서대로 `A`, `B`, `C`…(26명 넘으면 `AA`, `AB`…)로 바꿔 저장합니다. `me`가 있으면 ai가 준 이름(`me`, `speaker_1`…)을 그대로 저장합니다.
+- **재시도**: ai 429, 502, 503(`*_NOT_CONFIGURED` 제외), 504, 연결 실패, 저장소 오류. 최대 `VOICE_ANALYSIS_MAX_ATTEMPTS`회, 간격은 ai가 준 `Retry-After`(초)를 우선하고 없으면 `VOICE_ANALYSIS_RETRY_BASE_SECONDS × 2^(시도-1)`입니다. ai 호출 timeout은 재시도하지 않습니다.
+- **분석 중 거절**: ai는 분석을 한 번에 하나만 합니다. 다른 분석 중이라 `503 VOICE_BUSY`로 거절하면(예: 워커 재시작 직후 같은 작업을 다시 보낸 경우) 시도 횟수에 넣지 않고 `Retry-After`(보통 60초) 뒤에 다시 보냅니다. 첫 처리 시작부터 `VOICE_ANALYSIS_BUSY_MAX_WAIT_SECONDS`(기본 3600초)가 지나도 계속 거절되면 `VOICE_BUSY`로 실패 처리합니다.
+- **녹음 길이**: 길이 제한은 ai가 판단합니다. 60분을 넘는 녹음은 ai가 `400 AUDIO_TOO_LONG`으로 거절하고, 재시도 없이 "녹음이 60분을 넘어 분석할 수 없습니다."로 실패 처리합니다.
+- **화자 이름**: ai가 정한 이름을 그대로 저장합니다. "나"는 `me`, 나머지는 처음 말한 순서대로 `A`, `B`, `C`…(26명 넘으면 `AA`, `AB`…)입니다. 목소리 미등록 등으로 "나"를 찾지 못하면 모두 `A`부터 붙고 role은 `unknown`입니다.
+- **파일 크기**: 녹음은 `VOICE_RECORDING_MAX_BYTES`(기본 1GB)까지 받습니다. 길이 제한은 ai가 하므로 이 값은 서버 보호용 상한입니다. 60분 기준 m4a는 약 60MB, 44.1kHz 스테레오 WAV는 약 635MB, 48kHz 24bit 스테레오는 약 1GB입니다. API 앞단에 프록시(nginx 등)가 있으면 업로드 크기 제한(`client_max_body_size` 등)도 같은 값으로 맞춰야 합니다. 업로드 파일은 API 서버의 임시 디스크와 워커의 임시 파일에 한 번씩 저장되므로 서버 디스크 여유도 필요합니다.
 - **녹음 원본**은 `voice-recordings/{user_id}/{job_id}.{확장자}`에 저장하고 분석 후에도 보관합니다.
 - **timeout**: 분석은 `AI_ANALYZE_TIMEOUT_SECONDS`(기본 1800), 목소리 등록은 `AI_ENROLL_TIMEOUT_SECONDS`(기본 120)를 씁니다. 다른 AI 호출은 `AI_SERVICE_TIMEOUT_SECONDS`(30)를 그대로 씁니다.
 - **목소리 등록**(`POST /api/v1/voice/enroll`)은 동기 호출입니다. ai가 돌려준 `engine`과 256차원 `vector`를 `voiceprints` 테이블에 사용자당 하나 저장하고(JSONB. 벡터 비교는 ai가 하므로 pgvector를 쓰지 않음), 분석할 때 `voiceprint` form 필드로 함께 보냅니다.
