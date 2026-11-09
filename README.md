@@ -13,13 +13,42 @@ app/
 ├── schemas/            # 요청과 응답의 데이터 계약
 ├── services/           # 기능별 서버 워크플로 조합
 ├── repositories/       # PostgreSQL 조회 및 저장
+├── clients/            # 외부 AI 서비스, 오브젝트 스토리지, Redis 작업 큐
+├── workers/            # 별도 프로세스로 실행하는 비동기 작업 워커
 ├── db/                 # SQLAlchemy 기반 및 세션
 └── core/               # 환경 설정, 공통 오류, 인증 보안
 ```
 
 라우터는 HTTP 입력·출력을 처리하고, 서비스는 DB·Redis·외부 AI 호출을 조합합니다. SQL 쿼리는 `repositories/`에 둡니다. PostgreSQL이 원본 서비스 데이터의 저장소이며, 관계 분석의 임베딩과 유사도 검색은 **같은 PostgreSQL의 pgvector 확장**을 사용합니다. 벡터 차원, 테이블, 인덱스, 마이그레이션은 실제 임베딩 모델과 데이터 요구사항이 정해지면 추가합니다.
 
-`app/main.py`는 설정된 PostgreSQL 연결 풀, Redis 클라이언트, 외부 AI HTTP 클라이언트를 앱 시작 시 만들고 종료 시 닫습니다. 설정이 없는 연결은 만들지 않으므로 로컬에서 API 골격을 단독 실행할 수 있습니다. 오브젝트 스토리지 연동은 업로드 방식과 OCI/S3 호환 설정이 정해지면 서비스 경계에 추가합니다.
+`app/main.py`는 설정된 PostgreSQL 연결 풀, Redis 클라이언트, 외부 AI HTTP 클라이언트, 오브젝트 스토리지 클라이언트를 앱 시작 시 만들고 종료 시 닫습니다. 설정이 없는 연결은 만들지 않으므로 로컬에서 API 골격을 단독 실행할 수 있습니다.
+
+## 음성 분석 비동기 처리
+
+음성 분석은 몇 분이 걸리므로 API가 바로 처리하지 않고 워커에 넘깁니다.
+
+```text
+앱 → POST /api/v1/voice/analyses
+       녹음을 OCI Object Storage(S3 호환)에 저장 → voice_analysis_jobs 행 생성(queued)
+       → Redis 큐에 job_id 등록 → 202
+워커 → 큐에서 job_id를 꺼냄(processing) → 녹음 다운로드 → ai POST voice/analyze 호출
+       → 성공: succeeded + result 저장 / 실패: failed + error_code / 일시 오류: 지연 후 재시도
+앱 → GET /api/v1/voice/analyses/{job_id}  (본인 작업만 조회)
+```
+
+- **작업 상태와 결과**는 PostgreSQL `voice_analysis_jobs` 테이블이 원본입니다. Redis에는 job_id만 들어갑니다.
+- **Redis 키** (`flipside:voice-analysis:*`): `pending`(대기 목록), `processing`(처리 중), `delayed`(재시도 대기, sorted set). 처리가 끝나면 키에서 빠지므로 만료(TTL)를 두지 않습니다. 워커는 시작할 때 `processing`에 남은 작업을 되돌리고, DB에서 끝나지 않은 작업 중 Redis에 없는 작업을 다시 넣습니다.
+- **재시도**: ai 429(`Retry-After` 우선), 502, 503(`*_NOT_CONFIGURED` 제외), 504, 연결 실패, 저장소 오류. 최대 `VOICE_ANALYSIS_MAX_ATTEMPTS`회, 간격은 `VOICE_ANALYSIS_RETRY_BASE_SECONDS × 2^(시도-1)`입니다. ai 호출 timeout은 재시도하지 않습니다.
+- **화자 이름**: 결과에 `me`가 없으면(목소리 미등록 또는 "나"를 찾지 못함) 화자를 처음 말한 순서대로 `A`, `B`, `C`…(26명 넘으면 `AA`, `AB`…)로 바꿔 저장합니다. `me`가 있으면 ai가 준 이름(`me`, `speaker_1`…)을 그대로 저장합니다.
+- **녹음 원본**은 `voice-recordings/{user_id}/{job_id}.{확장자}`에 저장하고 분석 후에도 보관합니다.
+- **timeout**: 분석은 `AI_ANALYZE_TIMEOUT_SECONDS`(기본 1800), 목소리 등록은 `AI_ENROLL_TIMEOUT_SECONDS`(기본 120)를 씁니다. 다른 AI 호출은 `AI_SERVICE_TIMEOUT_SECONDS`(30)를 그대로 씁니다.
+- **목소리 등록**(`POST /api/v1/voice/enroll`)은 동기 호출입니다. ai가 돌려준 `engine`과 256차원 `vector`를 `voiceprints` 테이블에 사용자당 하나 저장하고(JSONB. 벡터 비교는 ai가 하므로 pgvector를 쓰지 않음), 분석할 때 `voiceprint` form 필드로 함께 보냅니다.
+
+워커 실행 (동시 실행 수 1, 컨테이너도 하나만 띄웁니다):
+
+```bash
+python -m app.workers.voice_analysis
+```
 
 ## 로컬 실행
 
@@ -43,7 +72,9 @@ uvicorn app.main:app --reload
 | `POST /api/v1/auth/login`         | 로그인, access token 발급             |
 | `GET /api/v1/auth/me`             | 내 정보 조회 (`Authorization: Bearer <token>`) |
 | `POST /api/v1/emotion/infer`      | 외부 AI 서비스로 감정 분석 요청       |
-| `POST /api/v1/voice/infer`        | 미구현 (501)                          |
+| `POST /api/v1/voice/enroll`       | 목소리 등록 (multipart `file`, 인증 필요) |
+| `POST /api/v1/voice/analyses`     | 음성 분석 작업 등록, 202 (multipart `file`, 인증 필요) |
+| `GET /api/v1/voice/analyses/{job_id}` | 음성 분석 상태·결과 조회 (본인 작업만) |
 | `POST /api/v1/relationship/infer` | 미구현 (501)                          |
 
 인증이 필요한 API는 `app/api/deps.py`의 `get_current_user` 의존성을 사용합니다.
@@ -56,3 +87,15 @@ docker run --rm -p 8000:8000 flipside-backend
 ```
 
 운영 환경에서는 연결 설정을 환경 변수나 비밀 관리 서비스로 주입합니다.
+
+워커는 같은 이미지를 command만 바꿔 별도 컨테이너로 실행합니다. 서버의 compose 파일에 `backend-worker` 서비스가 있어야 CI 배포가 성공합니다.
+
+```yaml
+  backend-worker:
+    image: yjs0120/spring-boot-app:flipside-backend
+    container_name: flipside-backend-worker
+    command: ["python", "-m", "app.workers.voice_analysis"]
+    restart: unless-stopped
+```
+
+이미지에 `.env`가 들어 있으므로 워커도 API와 같은 설정을 씁니다. `depends_on` 등은 서버 compose의 서비스 이름에 맞춰 추가합니다.
