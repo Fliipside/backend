@@ -233,3 +233,74 @@ def test_post_json_rejects_json_array_response() -> None:
                 )
 
     asyncio.run(run_test())
+
+def test_post_multipart_sends_form_fields_and_timeout() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/voice/analyze"
+        assert request.extensions["timeout"]["read"] == 1800.0
+
+        request_body = await request.aread()
+
+        assert b'name="file"' in request_body
+        assert b'filename="meeting.m4a"' in request_body
+        assert b"audio-content" in request_body
+        assert b'name="voiceprint"' in request_body
+        assert b'{"engine": "pyannote", "vector": [0.1]}' in request_body
+
+        return httpx.Response(status_code=200, json={"success": True, "data": {}})
+
+    async def run_test() -> None:
+        transport = httpx.MockTransport(handler)
+
+        async with httpx.AsyncClient(
+            base_url="http://ai-service.test",
+            transport=transport,
+            timeout=30,
+        ) as http_client:
+            client = AIServiceClient(http_client)
+
+            result = await client.post_multipart(
+                "voice/analyze",
+                files={"file": ("meeting.m4a", BytesIO(b"audio-content"), "audio/mp4")},
+                data={"voiceprint": json.dumps({"engine": "pyannote", "vector": [0.1]})},
+                timeout=1800.0,
+            )
+
+        assert result == {"success": True, "data": {}}
+
+    asyncio.run(run_test())
+
+
+def test_upstream_error_keeps_ai_error_code_and_retry_after() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=429,
+            headers={"retry-after": "42"},
+            json={
+                "success": False,
+                "code": "STT_RATE_LIMITED",
+                "message": "rate limited",
+                "data": None,
+            },
+        )
+
+    async def run_test() -> None:
+        transport = httpx.MockTransport(handler)
+
+        async with httpx.AsyncClient(
+            base_url="http://ai-service.test",
+            transport=transport,
+        ) as http_client:
+            client = AIServiceClient(http_client)
+
+            with pytest.raises(AIServiceUpstreamError) as exc_info:
+                await client.post_multipart(
+                    "voice/analyze",
+                    files={"file": ("a.wav", BytesIO(b"x"), "audio/wav")},
+                )
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.code == "STT_RATE_LIMITED"
+        assert exc_info.value.retry_after_seconds == 42.0
+
+    asyncio.run(run_test())
