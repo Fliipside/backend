@@ -134,7 +134,7 @@ class InvalidImageError(AppError):
 
     def __init__(self) -> None:
         super().__init__(
-                status_code=400,
+                status_code=415,
                 code="INVALID_IMAGE",
                 message="JPG, PNG, WebP 사진만 올릴 수 있습니다.",
             )
