@@ -6,12 +6,15 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.ai import AIServiceClient
+from app.clients.job_queue import RedisJobQueue
+from app.clients.storage import ObjectStorage
 from app.core.config import Settings
 from app.core.errors import AuthenticationError, InactiveUserError
 from app.core.security import decode_access_token
 from app.db.session import get_db_session
 from app.models.user import User
 from app.repositories.user import get_user_by_id
+from app.services.voice import VOICE_ANALYSIS_QUEUE
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -36,6 +39,22 @@ def get_ai_client(request: Request) -> AIServiceClient:
             detail="AI service is not configured",
         )
     return client
+
+
+def get_object_storage(request: Request) -> ObjectStorage:
+    storage = getattr(request.app.state, "object_storage", None)
+    if storage is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Object storage is not configured",
+        )
+    return storage
+
+
+def get_voice_analysis_queue(
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> RedisJobQueue:
+    return RedisJobQueue(redis, VOICE_ANALYSIS_QUEUE)
 
 
 async def get_current_user(

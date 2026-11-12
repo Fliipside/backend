@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     redis_url: str = ""
     ai_service_url: str = ""
     ai_service_timeout_seconds: float = Field(default=30.0, gt=0)
+    ai_enroll_timeout_seconds: float = Field(default=120.0, gt=0)
+    ai_analyze_timeout_seconds: float = Field(default=1800.0, gt=0)
+    s3_endpoint_url: str = ""
+    s3_region: str = ""
+    s3_bucket: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: SecretStr = SecretStr("")
+    voice_recording_max_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
+    voice_enroll_max_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    voice_analysis_max_attempts: int = Field(default=3, gt=0)
+    voice_analysis_retry_base_seconds: float = Field(default=30.0, gt=0)
+    voice_analysis_busy_max_wait_seconds: float = Field(default=3600.0, gt=0)
     jwt_secret_key: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = Field(default=60, gt=0)
@@ -56,6 +68,26 @@ class Settings(BaseSettings):
                 f"Incomplete PostgreSQL configuration: {', '.join(missing)}"
             )
         return self
+
+    @model_validator(mode="after")
+    def validate_s3_settings(self) -> Self:
+        values = {
+            "S3_ENDPOINT_URL": self.s3_endpoint_url,
+            "S3_BUCKET": self.s3_bucket,
+            "S3_ACCESS_KEY_ID": self.s3_access_key_id,
+            "S3_SECRET_ACCESS_KEY": self.s3_secret_access_key.get_secret_value(),
+        }
+
+        if any(values.values()) and not all(values.values()):
+            missing = [name for name, value in values.items() if not value]
+            raise ValueError(
+                f"Incomplete object storage configuration: {', '.join(missing)}"
+            )
+        return self
+
+    @property
+    def s3_configured(self) -> bool:
+        return bool(self.s3_bucket)
 
     @property
     def database_url(self) -> URL | None:

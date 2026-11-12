@@ -23,6 +23,7 @@ from app.schemas.response import ApiResponse
 from app.db.session import verify_database_connection
 from app.middleware.request_logging import register_request_logging_middleware
 from app.clients.ai import AIServiceClient
+from app.clients.storage import S3ObjectStorage
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.redis_client = redis_client
         app.state.ai_client = ai_client
+        app.state.object_storage = (
+            S3ObjectStorage.from_settings(settings) if settings.s3_configured else None
+        )
         yield
     finally:
         if ai_http_client is not None:

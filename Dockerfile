@@ -3,6 +3,8 @@ FROM python:3.11-slim
 WORKDIR /code
 COPY pyproject.toml ./
 COPY app ./app
+COPY alembic.ini ./
+COPY migrations ./migrations
 COPY .env ./.env
 RUN pip install --no-cache-dir .
 

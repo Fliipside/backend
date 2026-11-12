@@ -79,10 +79,86 @@ class AIServiceTimeoutError(AIServiceError):
     """Raised when the AI service does not respond in time."""
 
 class AIServiceUpstreamError(AIServiceError):
-    def __init__(self, status_code: int) -> None:
+    def __init__(
+            self,
+            status_code: int,
+            code: str | None = None,
+            retry_after_seconds: float | None = None,
+    ) -> None:
         self.status_code = status_code
-        super().__init__(f"AI service returned HTTP {status_code}")
+        self.code = code
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"AI service returned HTTP {status_code} ({code})")
 
 class AIServiceBadResponseError(AIServiceError):
     """Raised when the AI service returns an invalid response."""
 
+
+class PayloadTooLargeError(AppError):
+
+    def __init__(self, max_bytes: int) -> None:
+        super().__init__(
+                status_code=413,
+                code="PAYLOAD_TOO_LARGE",
+                message=f"파일 크기는 {max_bytes} 바이트를 넘을 수 없습니다.",
+            )
+
+class EmptyFileError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=400,
+                code="EMPTY_FILE",
+                message="빈 파일은 업로드할 수 없습니다.",
+            )
+
+class InvalidAudioError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=400,
+                code="INVALID_AUDIO",
+                message="음성 파일을 처리할 수 없습니다.",
+            )
+
+class VoiceAnalysisNotFoundError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=404,
+                code="VOICE_ANALYSIS_NOT_FOUND",
+                message="음성 분석 작업을 찾을 수 없습니다.",
+            )
+
+class ServiceNotConfiguredError(AppError):
+
+    def __init__(self, service: str) -> None:
+        super().__init__(
+                status_code=503,
+                code="SERVICE_UNAVAILABLE",
+                message=f"{service} is not configured",
+            )
+
+class ObjectStorageError(Exception):
+    """Raised when the object storage request fails."""
+
+class ObjectNotFoundError(ObjectStorageError):
+    """Raised when the requested object does not exist."""
+
+class StorageUnavailableError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=503,
+                code="STORAGE_UNAVAILABLE",
+                message="파일 저장소에 연결할 수 없습니다.",
+            )
+
+class QueueUnavailableError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=503,
+                code="QUEUE_UNAVAILABLE",
+                message="작업 큐에 연결할 수 없습니다.",
+            )

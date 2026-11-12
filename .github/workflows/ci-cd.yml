@@ -92,8 +92,8 @@ jobs:
           script: |
             set -e
             cd ~/flipside
-            docker compose pull backend
-            docker compose up -d backend
+            docker compose pull backend backend-worker
+            docker compose up -d backend backend-worker
             docker image prune -f
             for i in $(seq 1 10); do
               if curl -fsS http://127.0.0.1:8000/health; then
