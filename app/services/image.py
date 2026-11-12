@@ -69,8 +69,11 @@ async def create_image(
             content_type=content_type,
             file_size=size,
         )
-        await session.commit()
+        # Finish everything that can fail before the commit: after it succeeds the row
+        # is permanent, so the cleanup below must not delete the file it points at.
         await session.refresh(image)
+        response = _to_response(image, storage, settings)
+        await session.commit()
     except Exception:
         # No row points at the uploaded file, so nobody could ever delete it later.
         try:
@@ -79,7 +82,7 @@ async def create_image(
             logger.exception("Failed to remove orphan image %s", object_key)
         raise
 
-    return _to_response(image, storage, settings)
+    return response
 
 
 async def get_image(
