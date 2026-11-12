@@ -3,6 +3,16 @@ import time
 from redis.asyncio import Redis
 
 
+_PROMOTE_DUE_LUA = """
+local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+for _, job_id in ipairs(due) do
+    redis.call('ZREM', KEYS[1], job_id)
+    redis.call('LPUSH', KEYS[2], job_id)
+end
+return #due
+"""
+
+
 class RedisJobQueue:
     """Reliable FIFO queue holding only job ids. The DB row is the source of truth.
 
@@ -17,6 +27,7 @@ class RedisJobQueue:
         self.pending_key = f"{name}:pending"
         self.processing_key = f"{name}:processing"
         self.delayed_key = f"{name}:delayed"
+        self._promote_due_script = redis.register_script(_PROMOTE_DUE_LUA)
 
     async def enqueue(self, job_id: str) -> None:
         await self._redis.lpush(self.pending_key, job_id)
@@ -40,15 +51,15 @@ class RedisJobQueue:
             await pipe.execute()
 
     async def promote_due(self) -> int:
-        """Move delayed ids whose time has come back to pending."""
-        due = await self._redis.zrangebyscore(self.delayed_key, "-inf", time.time())
-        moved = 0
-        for job_id in due:
-            # zrem first so two promoters never push the same id twice.
-            if await self._redis.zrem(self.delayed_key, job_id):
-                await self._redis.lpush(self.pending_key, job_id)
-                moved += 1
-        return moved
+        """Move delayed ids whose time has come back to pending.
+
+        Runs as one Lua script so the remove from delayed and the push to pending
+        happen together. Re-running it after a lost reply finds nothing left to move.
+        """
+        return int(await self._promote_due_script(
+            keys=[self.delayed_key, self.pending_key],
+            args=[time.time()],
+        ))
 
     async def recover_processing(self) -> int:
         """Put ids left in processing by a stopped worker back to pending."""

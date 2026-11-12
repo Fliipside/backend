@@ -57,3 +57,25 @@ def test_recover_processing_puts_ids_back_first() -> None:
         assert await queue.dequeue(0.1) == "waiting"
 
     asyncio.run(run_test())
+
+
+def test_promote_due_moves_only_due_ids_and_is_safe_to_rerun() -> None:
+    async def run_test() -> None:
+        queue = make_queue()
+        for job_id in ("due-1", "due-2", "later"):
+            await queue.enqueue(job_id)
+            await queue.dequeue(0.1)
+        await queue.retry_later("due-1", 0)
+        await queue.retry_later("due-2", 0)
+        await queue.retry_later("later", 3600)
+
+        assert await queue.promote_due() == 2
+        # A retried call after a lost reply must not push anything twice.
+        assert await queue.promote_due() == 0
+
+        assert await queue.dequeue(0.1) == "due-1"
+        assert await queue.dequeue(0.1) == "due-2"
+        assert await queue.dequeue(0.1) is None
+        assert await queue.contains("later")
+
+    asyncio.run(run_test())
