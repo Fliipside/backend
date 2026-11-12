@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.body_limit import body_limited_route
 from app.api.deps import get_current_user, get_object_storage, get_settings_from_app
 from app.clients.storage import ObjectStorage
 from app.core.config import Settings
@@ -13,7 +14,9 @@ from app.schemas.image import ImageResponse
 from app.schemas.response import ApiResponse
 from app.services.image import create_image, delete_image, get_image
 
-router = APIRouter()
+router = APIRouter(
+    route_class=body_limited_route(lambda settings: settings.image_max_bytes),
+)
 
 
 @router.post(

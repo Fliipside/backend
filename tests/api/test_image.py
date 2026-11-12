@@ -6,9 +6,10 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.api.body_limit import MULTIPART_OVERHEAD_BYTES
 from app.core.config import Settings
 from app.core.errors import ObjectStorageError
 from app.db.base import Base
@@ -146,7 +147,7 @@ def test_upload_uses_detected_type_not_client_content_type(
     ("content", "status_code", "code"),
     [
         (b"", 400, "EMPTY_FILE"),
-        (b"not an image", 400, "INVALID_IMAGE"),
+        (b"not an image", 415, "INVALID_IMAGE"),
         (JPEG + b"x" * 100, 413, "PAYLOAD_TOO_LARGE"),
     ],
 )
@@ -168,6 +169,41 @@ def test_upload_rejects_bad_files(
 
 def test_upload_requires_login(client: TestClient) -> None:
     assert upload(client, {}).status_code == 401
+
+
+OVERSIZED_BODY_BYTES = 100 + MULTIPART_OVERHEAD_BYTES + 1
+
+
+def test_upload_rejects_oversized_body_before_login(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_parsed(*_args, **_kwargs):
+        raise AssertionError("the body must not be parsed")
+
+    monkeypatch.setattr("starlette.requests.Request.form", fail_if_parsed)
+
+    response = upload(client, {}, content=b"x" * OVERSIZED_BODY_BYTES)
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "PAYLOAD_TOO_LARGE"
+    assert response.json()["message"] == "파일 크기는 100 바이트를 넘을 수 없습니다."
+
+
+def test_upload_rejects_oversized_chunked_body_before_login(client: TestClient) -> None:
+    def chunks() -> Iterator[bytes]:
+        for _ in range(OVERSIZED_BODY_BYTES // 1024 + 1):
+            yield b"x" * 1024
+
+    response = client.post(
+        "/api/v1/images",
+        headers={"Content-Type": "multipart/form-data; boundary=test"},
+        content=chunks(),
+    )
+
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 413
+    assert response.json()["code"] == "PAYLOAD_TOO_LARGE"
 
 
 def test_upload_returns_503_when_storage_fails(
@@ -203,6 +239,55 @@ def test_upload_removes_file_when_database_save_fails(
         upload(client, headers)
 
     assert fake_storage.objects == {}
+
+
+def test_upload_keeps_file_when_failure_happens_after_commit(
+    client: TestClient,
+    sessionmaker: async_sessionmaker,
+    fake_storage: FakeObjectStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("connection lost after commit")
+
+    def fail_sync(*_args, **_kwargs):
+        raise ObjectStorageError
+
+    headers = auth_header(client)
+    real_commit = AsyncSession.commit
+
+    async def commit_then_break(session: AsyncSession) -> None:
+        await real_commit(session)
+        # Anything the service still does once the row is committed would hit these.
+        monkeypatch.setattr(AsyncSession, "refresh", fail)
+        monkeypatch.setattr(fake_storage, "presigned_get_url", fail_sync)
+
+    monkeypatch.setattr(AsyncSession, "commit", commit_then_break)
+
+    response = upload(client, headers)
+
+    assert response.status_code == 201
+    [image] = stored_images(sessionmaker)
+    assert image.object_key in fake_storage.objects
+
+
+def test_upload_removes_file_when_commit_fails(
+    client: TestClient,
+    sessionmaker: async_sessionmaker,
+    fake_storage: FakeObjectStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("db down")
+
+    headers = auth_header(client)
+    monkeypatch.setattr(AsyncSession, "commit", fail)
+
+    with pytest.raises(RuntimeError):
+        upload(client, headers)
+
+    assert fake_storage.objects == {}
+    assert stored_images(sessionmaker) == []
 
 
 def test_get_returns_own_image(client: TestClient) -> None:
