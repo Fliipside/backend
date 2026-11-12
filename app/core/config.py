@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     s3_secret_access_key: SecretStr = SecretStr("")
     voice_recording_max_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
     voice_enroll_max_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    image_max_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    image_url_expire_seconds: int = Field(default=3600, gt=0)
     voice_analysis_max_attempts: int = Field(default=3, gt=0)
     voice_analysis_retry_base_seconds: float = Field(default=30.0, gt=0)
     voice_analysis_busy_max_wait_seconds: float = Field(default=3600.0, gt=0)
