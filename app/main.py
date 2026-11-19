@@ -23,6 +23,7 @@ from app.schemas.response import ApiResponse
 from app.db.session import verify_database_connection
 from app.middleware.request_logging import register_request_logging_middleware
 from app.clients.ai import AIServiceClient
+from app.clients.email import SMTPEmailSender
 from app.clients.storage import S3ObjectStorage
 
 
@@ -82,6 +83,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.ai_client = ai_client
         app.state.object_storage = (
             S3ObjectStorage.from_settings(settings) if settings.s3_configured else None
+        )
+        app.state.email_sender = (
+            SMTPEmailSender.from_settings(settings) if settings.smtp_configured else None
         )
         yield
     finally:

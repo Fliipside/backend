@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     jwt_secret_key: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = Field(default=60, gt=0)
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, gt=0, le=65535)
+    smtp_username: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from_email: str = ""
+    smtp_from_name: str = "Flipside"
+    smtp_timeout_seconds: float = Field(default=10.0, gt=0)
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -87,9 +94,29 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_smtp_settings(self) -> Self:
+        values = {
+            "SMTP_HOST": self.smtp_host,
+            "SMTP_USERNAME": self.smtp_username,
+            "SMTP_PASSWORD": self.smtp_password.get_secret_value(),
+            "SMTP_FROM_EMAIL": self.smtp_from_email,
+        }
+
+        if any(values.values()) and not all(values.values()):
+            missing = [name for name, value in values.items() if not value]
+            raise ValueError(
+                f"Incomplete SMTP configuration: {', '.join(missing)}"
+            )
+        return self
+
     @property
     def s3_configured(self) -> bool:
         return bool(self.s3_bucket)
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.smtp_host)
 
     @property
     def database_url(self) -> URL | None:

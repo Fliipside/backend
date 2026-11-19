@@ -180,3 +180,7 @@ class QueueUnavailableError(AppError):
                 code="QUEUE_UNAVAILABLE",
                 message="작업 큐에 연결할 수 없습니다.",
             )
+
+
+class EmailSendError(Exception):
+    """Raised when the SMTP server cannot be reached or rejects the message."""
