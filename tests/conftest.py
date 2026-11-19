@@ -45,6 +45,20 @@ class FakeObjectStorage:
         return f"https://storage.test/{key}?expires={expires_in}"
 
 
+class FakeEmailSender:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, str | None]] = []
+
+    async def send(
+            self,
+            to: str,
+            subject: str,
+            text: str,
+            html: str | None = None,
+    ) -> None:
+        self.sent.append({"to": to, "subject": subject, "text": text, "html": html})
+
+
 class FakeAIClient:
     """Records multipart calls and returns queued responses or raises queued errors."""
 

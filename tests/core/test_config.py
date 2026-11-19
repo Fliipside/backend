@@ -55,3 +55,22 @@ def test_settings_allows_unconfigured_jwt_secret_key() -> None:
     settings = Settings(jwt_secret_key="")
 
     assert settings.jwt_secret_key.get_secret_value() == ""
+
+
+def test_settings_rejects_partial_smtp_configuration() -> None:
+    with pytest.raises(ValidationError, match="SMTP_PASSWORD, SMTP_FROM_EMAIL"):
+        Settings(smtp_host="smtp.example.com", smtp_username="sender@example.com")
+
+
+def test_settings_smtp_configured_only_when_host_is_set() -> None:
+    assert Settings().smtp_configured is False
+
+    settings = Settings(
+        smtp_host="smtp.example.com",
+        smtp_username="sender@example.com",
+        smtp_password="app-password",
+        smtp_from_email="sender@example.com",
+    )
+
+    assert settings.smtp_configured is True
+    assert settings.smtp_port == 587
