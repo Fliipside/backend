@@ -15,6 +15,15 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def update_password_hash(
+        session: AsyncSession,
+        user: User,
+        password_hash: str,
+) -> None:
+    user.password_hash = password_hash
+    await session.flush()
+
+
 async def create_user(
         session: AsyncSession,
         *,

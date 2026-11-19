@@ -3,14 +3,17 @@ from functools import partial
 from typing import ParamSpec, TypeVar
 
 from anyio import CapacityLimiter, to_thread
+from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import (
     EmailAlreadyExistsError,
+    EmailNotVerifiedError,
     InactiveUserError,
     InvalidCredentialsError,
+    InvalidEmailCodeError,
 )
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
@@ -20,7 +23,16 @@ from app.core.security import (
 )
 from app.models.user import User
 from app.repositories import user as user_repository
-from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse
+from app.schemas.auth import (
+    EmailCodeConfirmRequest,
+    EmailCodeRequest,
+    LoginRequest,
+    PasswordResetConfirmRequest,
+    SignupRequest,
+    TokenResponse,
+)
+from app.services import email_code
+from app.services.email_code import EmailJob
 
 
 P = ParamSpec("P")
@@ -45,10 +57,83 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-async def signup(session: AsyncSession, request: SignupRequest) -> User:
+async def request_signup_code(
+        session: AsyncSession,
+        redis: Redis,
+        request: EmailCodeRequest,
+        settings: Settings,
+) -> EmailJob:
     email = normalize_email(request.email)
     if await user_repository.get_user_by_email(session, email) is not None:
         raise EmailAlreadyExistsError
+
+    code = await email_code.issue_code(redis, email_code.PURPOSE_SIGNUP, email, settings)
+    return await email_code.create_email_job(
+        session, redis, email_code.PURPOSE_SIGNUP, email, code, settings
+    )
+
+
+async def confirm_signup_code(
+        redis: Redis,
+        request: EmailCodeConfirmRequest,
+        settings: Settings,
+) -> str:
+    email = normalize_email(request.email)
+    await email_code.confirm_code(
+        redis, email_code.PURPOSE_SIGNUP, email, request.code, settings
+    )
+    await email_code.mark_email_verified(redis, email, settings)
+    return email
+
+
+async def request_password_reset_code(
+        session: AsyncSession,
+        redis: Redis,
+        request: EmailCodeRequest,
+        settings: Settings,
+) -> EmailJob | None:
+    """Returns None when no email should go out. The caller answers the same either way."""
+    email = normalize_email(request.email)
+    code = await email_code.issue_code(
+        redis, email_code.PURPOSE_PASSWORD_RESET, email, settings
+    )
+
+    user = await user_repository.get_user_by_email(session, email)
+    if user is None or not user.is_active:
+        await email_code.discard_code(redis, email_code.PURPOSE_PASSWORD_RESET, email)
+        return None
+
+    return await email_code.create_email_job(
+        session, redis, email_code.PURPOSE_PASSWORD_RESET, email, code, settings
+    )
+
+
+async def reset_password(
+        session: AsyncSession,
+        redis: Redis,
+        request: PasswordResetConfirmRequest,
+        settings: Settings,
+) -> None:
+    email = normalize_email(request.email)
+    await email_code.confirm_code(
+        redis, email_code.PURPOSE_PASSWORD_RESET, email, request.code, settings
+    )
+
+    user = await user_repository.get_user_by_email(session, email)
+    if user is None or not user.is_active:
+        raise InvalidEmailCodeError
+
+    password_hash = await run_password_operation(hash_password, request.new_password)
+    await user_repository.update_password_hash(session, user, password_hash)
+    await session.commit()
+
+
+async def signup(session: AsyncSession, redis: Redis, request: SignupRequest) -> User:
+    email = normalize_email(request.email)
+    if await user_repository.get_user_by_email(session, email) is not None:
+        raise EmailAlreadyExistsError
+    if not await email_code.is_email_verified(redis, email):
+        raise EmailNotVerifiedError
 
     password_hash = await run_password_operation(hash_password, request.password)
     try:
@@ -63,6 +148,7 @@ async def signup(session: AsyncSession, request: SignupRequest) -> User:
         # 동시에 같은 이메일로 가입한 경우 unique 제약에서 걸린다.
         await session.rollback()
         raise EmailAlreadyExistsError from exc
+    await email_code.clear_email_verified(redis, email)
     return user
 
 

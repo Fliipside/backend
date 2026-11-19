@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     smtp_from_email: str = ""
     smtp_from_name: str = "Flipside"
     smtp_timeout_seconds: float = Field(default=10.0, gt=0)
+    email_code_expire_seconds: int = Field(default=600, gt=0)
+    email_code_resend_cooldown_seconds: int = Field(default=60, gt=0)
+    email_code_max_attempts: int = Field(default=5, gt=0)
+    email_verified_expire_seconds: int = Field(default=1800, gt=0)
+    email_recipient_daily_limit: int = Field(default=10, gt=0)
+    email_daily_send_limit: int = Field(default=250, gt=0)
 
     @field_validator("jwt_secret_key")
     @classmethod
