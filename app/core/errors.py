@@ -180,3 +180,68 @@ class QueueUnavailableError(AppError):
                 code="QUEUE_UNAVAILABLE",
                 message="작업 큐에 연결할 수 없습니다.",
             )
+
+
+class EmailSendError(Exception):
+    """Raised when the SMTP server cannot be reached or rejects the message."""
+
+
+class EmailNotVerifiedError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=403,
+                code="EMAIL_NOT_VERIFIED",
+                message="이메일 인증이 필요합니다.",
+            )
+
+
+class InvalidEmailCodeError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=400,
+                code="INVALID_EMAIL_CODE",
+                message="인증번호가 올바르지 않거나 만료되었습니다.",
+            )
+
+
+class EmailCodeAttemptsExceededError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=429,
+                code="EMAIL_CODE_ATTEMPTS_EXCEEDED",
+                message="인증번호 입력 횟수를 초과했습니다. 인증번호를 다시 요청해 주세요.",
+            )
+
+
+class EmailResendCooldownError(AppError):
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+                status_code=429,
+                code="EMAIL_RESEND_COOLDOWN",
+                message="잠시 후 다시 요청해 주세요.",
+                headers={"Retry-After": str(retry_after_seconds)},
+            )
+
+
+class EmailRecipientLimitError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=429,
+                code="EMAIL_RECIPIENT_LIMIT_EXCEEDED",
+                message="오늘 이 이메일로 보낼 수 있는 횟수를 초과했습니다.",
+            )
+
+
+class EmailDailyLimitError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=503,
+                code="EMAIL_DAILY_LIMIT_EXCEEDED",
+                message="오늘 보낼 수 있는 이메일 수를 초과했습니다. 내일 다시 시도해 주세요.",
+            )

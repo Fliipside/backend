@@ -16,7 +16,14 @@ from app.db.base import Base
 from app.main import create_app
 from app.models.voice import VoiceAnalysisJob, Voiceprint
 from app.services.voice import VOICE_ANALYSIS_QUEUE
-from tests.conftest import ANALYSIS_DATA, VOICEPRINT, FakeAIClient, FakeObjectStorage, ai_ok
+from tests.conftest import (
+    ANALYSIS_DATA,
+    VOICEPRINT,
+    FakeAIClient,
+    FakeObjectStorage,
+    ai_ok,
+    mark_email_verified,
+)
 
 
 @pytest.fixture
@@ -79,6 +86,7 @@ def client(
 
 
 def auth_header(client: TestClient, email: str = "user@example.com") -> dict[str, str]:
+    mark_email_verified(client, email)
     client.post(
         "/api/v1/auth/signup",
         json={"email": email, "password": "password1234", "nickname": "tester"},

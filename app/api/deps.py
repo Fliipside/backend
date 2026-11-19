@@ -3,9 +3,10 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.clients.ai import AIServiceClient
+from app.clients.email import EmailSender
 from app.clients.job_queue import RedisJobQueue
 from app.clients.storage import ObjectStorage
 from app.core.config import Settings
@@ -49,6 +50,23 @@ def get_object_storage(request: Request) -> ObjectStorage:
             detail="Object storage is not configured",
         )
     return storage
+
+
+def get_db_sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
+    sessionmaker = getattr(request.app.state, "db_sessionmaker", None)
+    if sessionmaker is None:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    return sessionmaker
+
+
+def get_email_sender(request: Request) -> EmailSender:
+    sender = getattr(request.app.state, "email_sender", None)
+    if sender is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Email service is not configured",
+        )
+    return sender
 
 
 def get_voice_analysis_queue(

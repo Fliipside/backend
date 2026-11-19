@@ -84,12 +84,26 @@ uvicorn app.main:app --reload
 
 `.env.example`을 참고해 `.env`를 만듭니다. 인증 API를 쓰려면 PostgreSQL 설정과 32바이트 이상의 무작위 `JWT_SECRET_KEY`가 필요합니다. 예를 들어 `python -c "import secrets; print(secrets.token_urlsafe(32))"`로 생성할 수 있습니다. 테이블은 `alembic upgrade head`로 생성합니다.
 
+이메일을 보내려면 `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`을 모두 채웁니다. 일부만 채우면 서버가 시작되지 않고, 모두 비우면 이메일 기능만 꺼집니다. Gmail은 `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`로 두고 `SMTP_PASSWORD`에 계정 비밀번호가 아닌 앱 비밀번호(16자리, 띄어쓰기 없이)를 넣습니다. 포트 465는 처음부터 TLS로, 그 외 포트는 STARTTLS로 접속합니다.
+
+회원가입 이메일 인증과 비밀번호 재설정은 SMTP와 Redis, PostgreSQL이 모두 연결돼 있어야 동작합니다.
+
+- 인증번호는 6자리 숫자이며 Redis에 해시로만 저장합니다. `EMAIL_CODE_EXPIRE_SECONDS`(기본 600초) 뒤 만료되고, `EMAIL_CODE_MAX_ATTEMPTS`(기본 5회)를 넘게 틀리면 폐기됩니다.
+- 같은 주소로는 `EMAIL_CODE_RESEND_COOLDOWN_SECONDS`(기본 60초)에 한 번, 하루 `EMAIL_RECIPIENT_DAILY_LIMIT`(기본 10회)까지 요청할 수 있습니다.
+- 서비스 전체로는 하루(UTC 기준) `EMAIL_DAILY_SEND_LIMIT`(기본 250통)까지만 보냅니다. Gmail 한도가 최근 24시간 기준 500명이라, 날짜가 바뀌는 시점에 걸쳐도 넘지 않도록 절반으로 잡았습니다.
+- 메일은 응답을 보낸 뒤에 발송하고, 결과를 `email_logs` 테이블에 `pending` → `sent` 또는 `failed`로 남깁니다. `sent`는 SMTP 서버가 접수했다는 뜻이며 수신함 도착을 보장하지 않습니다.
+- 비밀번호 재설정 요청은 가입 여부와 관계없이 같은 응답을 줍니다. 비밀번호를 바꿔도 이미 발급된 access token은 만료 시각까지 유효합니다.
+
 ## 현재 API 상태
 
 | 경로                              | 설명                                  |
 | --------------------------------- | ------------------------------------- |
 | `GET /health`                     | 서버 프로세스 생존 확인 (DB·Redis 상태는 확인하지 않음) |
-| `POST /api/v1/auth/signup`        | 회원가입 (`email`, `password`, `nickname`) |
+| `POST /api/v1/auth/email-verification/request` | 회원가입용 인증번호 메일 발송 (`email`) |
+| `POST /api/v1/auth/email-verification/confirm` | 인증번호 확인 (`email`, `code`), 성공 후 30분 안에 가입 |
+| `POST /api/v1/auth/signup`        | 회원가입 (`email`, `password`, `nickname`), 이메일 인증을 마친 주소만 가능 |
+| `POST /api/v1/auth/password-reset/request` | 비밀번호 재설정 인증번호 메일 발송 (`email`) |
+| `POST /api/v1/auth/password-reset/confirm` | 인증번호 확인 후 비밀번호 변경 (`email`, `code`, `new_password`) |
 | `POST /api/v1/auth/login`         | 로그인, access token 발급             |
 | `GET /api/v1/auth/me`             | 내 정보 조회 (`Authorization: Bearer <token>`) |
 | `POST /api/v1/emotion/infer`      | 외부 AI 서비스로 감정 분석 요청       |
