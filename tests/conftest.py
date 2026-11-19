@@ -2,8 +2,10 @@ from io import BytesIO
 from typing import Any, BinaryIO, Mapping
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.core.errors import ObjectNotFoundError
+from app.services import email_code
 
 
 VOICEPRINT = {"engine": "pyannote", "vector": [0.25] * 256}
@@ -45,9 +47,20 @@ class FakeObjectStorage:
         return f"https://storage.test/{key}?expires={expires_in}"
 
 
+def mark_email_verified(client: TestClient, email: str) -> None:
+    """Let a test sign up without going through the emailed code."""
+    client.portal.call(
+        email_code.mark_email_verified,
+        client.app.state.redis_client,
+        email.strip().lower(),
+        client.app.state.settings,
+    )
+
+
 class FakeEmailSender:
     def __init__(self) -> None:
         self.sent: list[dict[str, str | None]] = []
+        self.error: Exception | None = None
 
     async def send(
             self,
@@ -56,6 +69,8 @@ class FakeEmailSender:
             text: str,
             html: str | None = None,
     ) -> None:
+        if self.error is not None:
+            raise self.error
         self.sent.append({"to": to, "subject": subject, "text": text, "html": html})
 
 

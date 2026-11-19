@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -16,7 +17,7 @@ from app.db.base import Base
 from app.main import create_app
 from app.models.image import Image
 from app.services.image import detect_image_type
-from tests.conftest import FakeObjectStorage
+from tests.conftest import FakeObjectStorage, mark_email_verified
 
 
 JPEG = b"\xff\xd8\xff\xe0" + b"jpeg-body"
@@ -56,11 +57,13 @@ def client(
 
     with TestClient(app) as test_client:
         app.state.db_sessionmaker = sessionmaker
+        app.state.redis_client = fakeredis.aioredis.FakeRedis(decode_responses=True)
         app.state.object_storage = fake_storage
         yield test_client
 
 
 def auth_header(client: TestClient, email: str = "user@example.com") -> dict[str, str]:
+    mark_email_verified(client, email)
     client.post(
         "/api/v1/auth/signup",
         json={"email": email, "password": "password1234", "nickname": "tester"},
