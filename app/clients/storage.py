@@ -15,6 +15,10 @@ class ObjectStorage(Protocol):
 
     async def download(self, key: str, destination: BinaryIO) -> None: ...
 
+    async def delete(self, key: str) -> None: ...
+
+    def presigned_get_url(self, key: str, expires_in: int) -> str: ...
+
 
 class S3ObjectStorage:
     """OCI Object Storage via its S3-compatible API. boto3 is sync, so calls run in threads."""
@@ -34,8 +38,11 @@ class S3ObjectStorage:
             region_name=settings.s3_region or None,
             aws_access_key_id=settings.s3_access_key_id,
             aws_secret_access_key=settings.s3_secret_access_key.get_secret_value(),
-            # OCI requires path-style addressing.
-            config=Config(s3={"addressing_style": "path"}),
+            # OCI requires path-style addressing and SigV4 (also for presigned URLs).
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+            ),
         )
         return cls(client, settings.s3_bucket)
 
@@ -61,6 +68,23 @@ class S3ObjectStorage:
             key,
             destination,
         )
+
+    async def delete(self, key: str) -> None:
+        # S3 delete succeeds even when the key is already gone.
+        await self._call(self._client.delete_object, Bucket=self._bucket, Key=key)
+
+    def presigned_get_url(self, key: str, expires_in: int) -> str:
+        """Sign locally (no network call). The URL works without credentials until it expires."""
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        try:
+            return self._client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self._bucket, "Key": key},
+                ExpiresIn=expires_in,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStorageError from exc
 
     async def _call(self, func: Any, *args: Any, **kwargs: Any) -> None:
         from botocore.exceptions import BotoCoreError, ClientError

@@ -1,8 +1,6 @@
-import asyncio
 import logging
 import re
 from pathlib import PurePath
-from typing import BinaryIO
 from uuid import UUID, uuid4
 
 from fastapi import UploadFile
@@ -17,11 +15,9 @@ from app.core.config import Settings
 from app.core.errors import (
     AIServiceBadResponseError,
     AIServiceUpstreamError,
-    EmptyFileError,
     FeatureNotReadyError,
     InvalidAudioError,
     ObjectStorageError,
-    PayloadTooLargeError,
     QueueUnavailableError,
     StorageUnavailableError,
     VoiceAnalysisNotFoundError,
@@ -35,6 +31,7 @@ from app.schemas.voice import (
     VoiceAnalysisResponse,
     VoiceEnrollResponse,
 )
+from app.services.upload import measure_upload
 
 
 logger = logging.getLogger(__name__)
@@ -52,21 +49,6 @@ def unwrap_ai_data(payload: dict[str, object]) -> object:
     if payload.get("success") is not True or "data" not in payload:
         raise AIServiceBadResponseError
     return payload["data"]
-
-
-async def measure_upload(file: UploadFile, max_bytes: int) -> int:
-    def measure(content: BinaryIO) -> int:
-        content.seek(0, 2)
-        size = content.tell()
-        content.seek(0)
-        return size
-
-    size = await asyncio.to_thread(measure, file.file)
-    if size == 0:
-        raise EmptyFileError
-    if size > max_bytes:
-        raise PayloadTooLargeError(max_bytes)
-    return size
 
 
 async def enroll_voice(

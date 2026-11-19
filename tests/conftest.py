@@ -37,6 +37,13 @@ class FakeObjectStorage:
             raise ObjectNotFoundError
         destination.write(self.objects[key])
 
+    async def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
+        self.content_types.pop(key, None)
+
+    def presigned_get_url(self, key: str, expires_in: int) -> str:
+        return f"https://storage.test/{key}?expires={expires_in}"
+
 
 class FakeAIClient:
     """Records multipart calls and returns queued responses or raises queued errors."""

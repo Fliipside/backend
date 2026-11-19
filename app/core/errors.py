@@ -130,6 +130,24 @@ class VoiceAnalysisNotFoundError(AppError):
                 message="음성 분석 작업을 찾을 수 없습니다.",
             )
 
+class InvalidImageError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=415,
+                code="INVALID_IMAGE",
+                message="JPG, PNG, WebP 사진만 올릴 수 있습니다.",
+            )
+
+class ImageNotFoundError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=404,
+                code="IMAGE_NOT_FOUND",
+                message="이미지를 찾을 수 없습니다.",
+            )
+
 class ServiceNotConfiguredError(AppError):
 
     def __init__(self, service: str) -> None:

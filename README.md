@@ -53,6 +53,24 @@ app/
 python -m app.workers.voice_analysis
 ```
 
+## 이미지 업로드
+
+명함 사진처럼 사용자가 올리는 이미지를 저장합니다. 이미지는 특정 화면에 묶이지 않은 독립 리소스이고, 앱은 돌려받은 `image_id`를 자기 데이터(예: 고객)에 저장해 둡니다.
+
+```text
+앱 → POST /api/v1/images (multipart file)
+       크기·형식 확인 → OCI Object Storage 저장 → images 행 생성 → 201 (image_id, url)
+앱 → GET /api/v1/images/{image_id}     (본인 것만) → 새 서명 URL
+앱 → DELETE /api/v1/images/{image_id}  (본인 것만) → 저장소 파일 삭제 후 행 삭제
+```
+
+- **형식**: JPEG, PNG, WebP만 받습니다. 요청의 Content-Type이 아니라 파일 앞부분 바이트로 판별하고, 판별한 형식을 저장합니다. 그 외는 `415 INVALID_IMAGE`입니다. 서버는 크기를 줄이거나 형식을 바꾸지 않으므로, HEIC 같은 형식은 앱이 JPEG로 바꿔서 보내야 합니다.
+- **크기**: `IMAGE_MAX_BYTES`(기본 10MB)까지 받습니다. 넘으면 `413 PAYLOAD_TOO_LARGE`입니다. 요청 본문이 이 값(+multipart 여유 64KB)을 넘으면 로그인 확인이나 파일 저장보다 먼저 거절하므로, 크기가 큰 요청은 토큰이 없어도 `401`이 아니라 `413`을 받습니다. `Content-Length`가 없는 chunked 요청도 받은 바이트를 세어 같은 기준으로 끊습니다.
+- **보기**: 버킷은 비공개입니다. 응답의 `url`은 `IMAGE_URL_EXPIRE_SECONDS`(기본 3600초) 동안만 열리는 서명 URL이라 토큰 없이 `<img src>`에 바로 쓸 수 있습니다. `url_expires_at`이 지나면 `GET`으로 다시 받습니다. URL을 아는 사람은 만료 전까지 볼 수 있으므로 오래 저장하거나 공유하지 않습니다.
+- **저장 위치**: `images/{user_id}/{image_id}.{jpg|png|webp}`
+- **바꾸기**: ① 새 이미지를 올리고 ② 새 `image_id`를 앱 데이터(예: 고객)에 저장한 뒤 ③ 저장이 성공하면 이전 `image_id`를 삭제합니다. 이전 이미지를 먼저 지우면 ②가 실패했을 때 앱 데이터가 이미 지워진 이미지를 가리키게 됩니다.
+- **삭제 순서**: 저장소 파일을 먼저 지우고 행을 지웁니다. 저장소 오류면 `503`을 돌려주고 행이 남으므로 다시 시도할 수 있습니다.
+
 ## 로컬 실행
 
 Python **3.11.x**에서 `backend` 디렉터리로 이동한 뒤:
@@ -78,6 +96,9 @@ uvicorn app.main:app --reload
 | `POST /api/v1/voice/enroll`       | 목소리 등록 (multipart `file`, 인증 필요) |
 | `POST /api/v1/voice/analyses`     | 음성 분석 작업 등록, 202 (multipart `file`, 인증 필요) |
 | `GET /api/v1/voice/analyses/{job_id}` | 음성 분석 상태·결과 조회 (본인 작업만) |
+| `POST /api/v1/images`             | 이미지 업로드, 201 (multipart `file`, 인증 필요) |
+| `GET /api/v1/images/{image_id}`   | 이미지 정보와 서명 URL 조회 (본인 것만) |
+| `DELETE /api/v1/images/{image_id}` | 이미지 삭제 (본인 것만)              |
 | `POST /api/v1/relationship/infer` | 미구현 (501)                          |
 
 인증이 필요한 API는 `app/api/deps.py`의 `get_current_user` 의존성을 사용합니다.
