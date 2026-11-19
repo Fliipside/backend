@@ -101,9 +101,9 @@ uvicorn app.main:app --reload
 | `GET /health`                     | 서버 프로세스 생존 확인 (DB·Redis 상태는 확인하지 않음) |
 | `POST /api/v1/auth/email-verification/request` | 회원가입용 인증번호 메일 발송 (`email`) |
 | `POST /api/v1/auth/email-verification/confirm` | 인증번호 확인 (`email`, `code`), 성공 후 30분 안에 가입 |
-| `POST /api/v1/auth/signup`        | 회원가입 (`email`, `password`, `nickname`), 이메일 인증을 마친 주소만 가능 |
+| `POST /api/v1/auth/signup`        | 회원가입 (`email`, `password`, `nickname`, `company`), 이메일 인증을 마친 주소만 가능. 비밀번호는 영문과 숫자를 포함한 8자 이상 |
 | `POST /api/v1/auth/password-reset/request` | 비밀번호 재설정 인증번호 메일 발송 (`email`) |
-| `POST /api/v1/auth/password-reset/confirm` | 인증번호 확인 후 비밀번호 변경 (`email`, `code`, `new_password`) |
+| `POST /api/v1/auth/password-reset/confirm` | 인증번호 확인 후 비밀번호 변경 (`email`, `code`, `new_password`). 새 비밀번호도 같은 규칙 |
 | `POST /api/v1/auth/login`         | 로그인, access token 발급             |
 | `GET /api/v1/auth/me`             | 내 정보 조회 (`Authorization: Bearer <token>`) |
 | `POST /api/v1/emotion/infer`      | 외부 AI 서비스로 감정 분석 요청       |

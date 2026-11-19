@@ -42,6 +42,14 @@ class User(Base):
         nullable=False,
     )
 
+    # 이 항목이 생기기 전에 가입한 사용자는 빈 문자열로 남는다.
+    company: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="",
+        server_default="",
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

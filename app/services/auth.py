@@ -142,6 +142,7 @@ async def signup(session: AsyncSession, redis: Redis, request: SignupRequest) ->
             email=email,
             password_hash=password_hash,
             nickname=request.nickname,
+            company=request.company,
         )
         await session.commit()
     except IntegrityError as exc:
