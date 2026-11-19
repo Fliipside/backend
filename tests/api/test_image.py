@@ -66,7 +66,12 @@ def auth_header(client: TestClient, email: str = "user@example.com") -> dict[str
     mark_email_verified(client, email)
     client.post(
         "/api/v1/auth/signup",
-        json={"email": email, "password": "password1234", "nickname": "tester"},
+        json={
+            "email": email,
+            "password": "password1234",
+            "nickname": "tester",
+            "company": "Flipside",
+        },
     )
     response = client.post(
         "/api/v1/auth/login",

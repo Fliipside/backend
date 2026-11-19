@@ -30,11 +30,13 @@ async def create_user(
         email: str,
         password_hash: str,
         nickname: str,
+        company: str,
 ) -> User:
     user = User(
         email=email,
         password_hash=password_hash,
         nickname=nickname,
+        company=company,
     )
     session.add(user)
     await session.flush()
