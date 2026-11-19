@@ -84,6 +84,8 @@ uvicorn app.main:app --reload
 
 `.env.example`을 참고해 `.env`를 만듭니다. 인증 API를 쓰려면 PostgreSQL 설정과 32바이트 이상의 무작위 `JWT_SECRET_KEY`가 필요합니다. 예를 들어 `python -c "import secrets; print(secrets.token_urlsafe(32))"`로 생성할 수 있습니다. 테이블은 `alembic upgrade head`로 생성합니다.
 
+이메일을 보내려면 `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`을 모두 채웁니다. 일부만 채우면 서버가 시작되지 않고, 모두 비우면 이메일 기능만 꺼집니다. Gmail은 `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`로 두고 `SMTP_PASSWORD`에 계정 비밀번호가 아닌 앱 비밀번호(16자리, 띄어쓰기 없이)를 넣습니다. 포트 465는 처음부터 TLS로, 그 외 포트는 STARTTLS로 접속합니다.
+
 ## 현재 API 상태
 
 | 경로                              | 설명                                  |
