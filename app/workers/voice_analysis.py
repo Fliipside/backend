@@ -31,7 +31,9 @@ from app.core.errors import (
     ObjectNotFoundError,
     ObjectStorageError,
 )
+from app.models.memory import MEMORY_INGEST_QUEUE
 from app.models.voice import VoiceAnalysisStatus
+from app.repositories import memory as memory_repository
 from app.repositories import voice as voice_repository
 from app.schemas.voice import VoiceAnalysisResult
 from app.services.voice import (
@@ -148,12 +150,15 @@ class VoiceAnalysisWorker:
             *,
             sessionmaker: async_sessionmaker,
             queue: RedisJobQueue,
+            memory_queue: RedisJobQueue,
             storage: ObjectStorage,
             ai_client: AIServiceClient,
             settings: Settings,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._queue = queue
+        # Only written to here. The memory ingest worker takes ids out.
+        self._memory_queue = memory_queue
         self._storage = storage
         self._ai_client = ai_client
         self._settings = settings
@@ -173,6 +178,26 @@ class VoiceAnalysisWorker:
             recovered,
             requeued,
         )
+        await self._reconcile_memory_queue()
+
+    async def _reconcile_memory_queue(self) -> None:
+        """Re-queue queued memory ingest rows whose id never reached Redis.
+
+        processing rows are left alone: the memory ingest worker owns them.
+        """
+        try:
+            async with self._sessionmaker() as session:
+                job_ids = await memory_repository.list_queued_job_ids(session)
+            requeued = 0
+            for job_id in job_ids:
+                if not await self._memory_queue.contains(str(job_id)):
+                    await self._memory_queue.enqueue(str(job_id))
+                    requeued += 1
+        except Exception:
+            # Voice analysis must still start. The rows stay queued for the next start.
+            logger.exception("Memory ingest queue reconcile failed")
+            return
+        logger.info("Memory ingest queue reconciled: requeued=%d", requeued)
 
     async def run_once(self, timeout_seconds: float = DEQUEUE_TIMEOUT_SECONDS) -> bool:
         """Handle at most one job. Returns False when the queue was empty."""
@@ -261,9 +286,31 @@ class VoiceAnalysisWorker:
             job.error_code = None
             job.error_message = None
             job.finished_at = _now()
+            # Same transaction as succeeded, so a succeeded job never lacks its row.
+            # Jobs from before interactions existed have nowhere to store memory.
+            memory_job = None
+            if job.interaction_id is not None:
+                memory_job = await memory_repository.create_memory_ingest_job(
+                    session,
+                    voice_job_id=job.id,
+                    interaction_id=job.interaction_id,
+                )
             await session.commit()
         logger.info("Voice analysis job %s succeeded", job_id)
+        if memory_job is not None:
+            await self._enqueue_memory_ingest(memory_job.id)
         return JobOutcome()
+
+    async def _enqueue_memory_ingest(self, memory_job_id: UUID) -> None:
+        try:
+            await self._memory_queue.enqueue(str(memory_job_id))
+        except Exception:
+            # The analysis itself succeeded. The row stays queued and reconcile()
+            # puts it in the queue at the next worker start.
+            logger.exception(
+                "Memory ingest job %s could not be queued",
+                memory_job_id,
+            )
 
     async def _analyze(
             self,
@@ -354,6 +401,7 @@ async def main() -> None:
     worker = VoiceAnalysisWorker(
         sessionmaker=async_sessionmaker(engine, expire_on_commit=False),
         queue=RedisJobQueue(redis, VOICE_ANALYSIS_QUEUE),
+        memory_queue=RedisJobQueue(redis, MEMORY_INGEST_QUEUE),
         storage=S3ObjectStorage.from_settings(settings),
         ai_client=AIServiceClient(http_client),
         settings=settings,
