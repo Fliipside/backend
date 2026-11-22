@@ -86,3 +86,13 @@ def test_settings_smtp_configured_only_when_host_is_set() -> None:
 
     assert settings.smtp_configured is True
     assert settings.smtp_port == 587
+
+
+def test_settings_ai_memory_timeout_defaults(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_EXTRACT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("AI_ASK_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings()
+
+    assert settings.ai_extract_timeout_seconds == 540.0
+    assert settings.ai_ask_timeout_seconds == 300.0
