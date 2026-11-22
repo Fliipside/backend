@@ -71,6 +71,23 @@ python -m app.workers.voice_analysis
 - **바꾸기**: ① 새 이미지를 올리고 ② 새 `image_id`를 앱 데이터(예: 고객)에 저장한 뒤 ③ 저장이 성공하면 이전 `image_id`를 삭제합니다. 이전 이미지를 먼저 지우면 ②가 실패했을 때 앱 데이터가 이미 지워진 이미지를 가리키게 됩니다.
 - **삭제 순서**: 저장소 파일을 먼저 지우고 행을 지웁니다. 저장소 오류면 `503`을 돌려주고 행이 남으므로 다시 시도할 수 있습니다.
 
+## 고객
+
+고객 1건은 사용자가 만나는 상대 회사의 담당자 1명입니다. 화면에는 "노바테크 / IT·솔루션 · 김민준 사업개발팀 부장"처럼 나옵니다. 녹음 업로드가 받을 `customer_id`가 이 테이블의 `id`를 가리킵니다.
+
+```text
+앱 → POST  /api/v1/customers                → customers 행 생성 → 201 (customer_id)
+앱 → GET   /api/v1/customers                → 본인이 등록한 고객 전체, 최근 등록 순
+앱 → GET   /api/v1/customers/{customer_id}  (본인 것만)
+앱 → PATCH /api/v1/customers/{customer_id}  (본인 것만) → 보낸 항목만 수정
+```
+
+- **id**: 사용자 id는 UUID지만 고객 id(`customer_id`)는 자동 증가 정수입니다.
+- **항목**: `company_name`(필수, 100자), `industry`(100자), `name`(필수, 50자), `department`(100자), `title`(50자). 앞뒤 공백은 떼고 저장합니다. 선택 항목은 빼거나 `null`, 빈 문자열로 보내면 `null`로 저장합니다.
+- **수정**: 본문에 넣은 항목만 바뀝니다. 선택 항목은 `null`이나 빈 문자열을 보내 비울 수 있고, 필수 항목에 `null`이나 빈 값을 보내면 `422`입니다.
+- **소유자**: 로그인한 사용자가 등록한 고객만 다룹니다. 없는 id와 다른 사용자의 고객 id는 똑같이 `404 CUSTOMER_NOT_FOUND`입니다. 사용자를 삭제하면 그 사용자의 고객도 함께 삭제됩니다.
+- **목록**: 한 번에 전부 돌려줍니다. 검색, 페이지 나누기, 삭제 API는 아직 없습니다.
+
 ## 로컬 실행
 
 Python **3.11.x**에서 `backend` 디렉터리로 이동한 뒤:
@@ -113,6 +130,10 @@ uvicorn app.main:app --reload
 | `POST /api/v1/images`             | 이미지 업로드, 201 (multipart `file`, 인증 필요) |
 | `GET /api/v1/images/{image_id}`   | 이미지 정보와 서명 URL 조회 (본인 것만) |
 | `DELETE /api/v1/images/{image_id}` | 이미지 삭제 (본인 것만)              |
+| `POST /api/v1/customers`          | 고객 등록, 201 (`company_name`, `name` 필수, 인증 필요) |
+| `GET /api/v1/customers`           | 내가 등록한 고객 목록, 최근 등록 순   |
+| `GET /api/v1/customers/{customer_id}` | 고객 단건 조회 (본인 것만)        |
+| `PATCH /api/v1/customers/{customer_id}` | 고객 수정, 보낸 항목만 (본인 것만) |
 | `POST /api/v1/relationship/infer` | 미구현 (501)                          |
 
 인증이 필요한 API는 `app/api/deps.py`의 `get_current_user` 의존성을 사용합니다.
