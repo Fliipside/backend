@@ -65,6 +65,11 @@ class VoiceAnalysisJob(Base):
         nullable=False,
         index=True,
     )
+    # NULL only for jobs created before interactions existed.
+    interaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("interactions.id", ondelete="SET NULL"),
+    )
     status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
