@@ -28,15 +28,30 @@ app/
 음성 분석은 몇 분이 걸리므로 API가 바로 처리하지 않고 워커에 넘깁니다.
 
 ```text
-앱 → POST /api/v1/voice/analyses
-       녹음을 OCI Object Storage(S3 호환)에 저장 → voice_analysis_jobs 행 생성(queued)
-       → Redis 큐에 job_id 등록 → 202
+앱 → POST /api/v1/voice/analyses  (file, customer_id, kind, title, occurred_at)
+       폼 값과 고객 확인 → 녹음을 OCI Object Storage(S3 호환)에 저장
+       → interactions 행과 voice_analysis_jobs 행(queued)을 한 트랜잭션으로 생성
+       → Redis 큐에 job_id 등록 → 202 (job_id, interaction_id)
 워커 → 큐에서 job_id를 꺼냄(processing) → 녹음 다운로드 → ai POST voice/analyze 호출
        → 성공: succeeded + result 저장 / 실패: failed + error_code / 일시 오류: 지연 후 재시도
 앱 → GET /api/v1/voice/analyses/{job_id}  (본인 작업만 조회)
 ```
 
 - **작업 상태와 결과**는 PostgreSQL `voice_analysis_jobs` 테이블이 원본입니다. Redis에는 job_id만 들어갑니다.
+- **대화(`interactions`)**: 녹음 1건은 고객 1명과의 대화 1건입니다. `voice_analysis_jobs`는 처리 상태만 담고, 어떤 고객과의 어떤 대화인지는 `interactions` 테이블(`id` UUID, `customer_id`, `owner_user_id`, `kind`, `title`, `occurred_at`)에 둡니다. 작업은 `voice_analysis_jobs.interaction_id`로 대화를 가리킵니다. 이 테이블이 생기기 전에 만든 작업은 `interaction_id`가 `NULL`이고, 조회 응답의 `interaction_id`, `customer_id`, `kind`, `title`, `occurred_at`도 `null`입니다.
+- **업로드 폼 값**: `file` 외에 아래 값을 multipart form 필드로 받습니다. 선택 항목은 빼거나 빈 값으로 보내면 기본값을 씁니다.
+
+  | 필드 | 필수 | 기본값 | 설명 |
+  | --- | --- | --- | --- |
+  | `customer_id` | 필수 | 없음 | 본인이 등록한 고객의 id(정수) |
+  | `kind` | 선택 | `meeting` | `meeting`(대면 미팅) 또는 `call`(통화) |
+  | `title` | 선택 | 업로드 파일명에서 확장자를 뺀 것 | 200자까지. 앞뒤 공백은 뗍니다 |
+  | `occurred_at` | 선택 | 업로드 시각 | 대화가 있었던 시각. ISO 8601이고 시간대가 있어야 합니다. 예: `2026-11-20T14:00:00+09:00`, `2026-11-20T05:00:00Z`. UTC로 바꿔 저장합니다 |
+
+- **⚠️ 기존 요청과 호환되지 않음**: `customer_id`가 필수라서 `file`만 보내던 기존 요청은 `400 INVALID_REQUEST`가 됩니다. 프런트는 나중에 맞추기로 한 의도한 동작입니다.
+- **업로드 검증**: 폼 값과 고객은 녹음을 저장소에 올리기 전에 확인하므로, 거절된 요청은 파일도 행도 남기지 않습니다. 폼 값이 틀리면(`customer_id` 없음·정수 아님, `kind`가 다른 값, `title` 200자 초과, `occurred_at` 형식 오류·시간대 없음) `400 INVALID_REQUEST`이고 `message`에 어느 값이 틀렸는지 나옵니다. 없는 고객 id와 다른 사용자의 고객 id는 똑같이 `404 CUSTOMER_NOT_FOUND`입니다.
+- **삭제**: 고객을 삭제하면 그 고객의 대화도 함께 삭제되고, 작업 행은 남되 `interaction_id`가 `NULL`이 됩니다.
+- **ai로 보내는 값**: 워커가 ai `voice/analyze`로 보내는 값(`file`, `voiceprint`)은 그대로입니다. 대화 정보는 보내지 않습니다.
 - **Redis 키** (`flipside:voice-analysis:*`): `pending`(대기 목록), `processing`(처리 중), `delayed`(재시도 대기, sorted set). 처리가 끝나면 키에서 빠지므로 만료(TTL)를 두지 않습니다. 워커는 시작할 때 `processing`에 남은 작업을 되돌리고, DB에서 끝나지 않은 작업 중 Redis에 없는 작업을 다시 넣습니다.
 - **재시도**: ai 429, 502, 503(`*_NOT_CONFIGURED` 제외), 504, 연결 실패, 저장소 오류. 최대 `VOICE_ANALYSIS_MAX_ATTEMPTS`회, 간격은 ai가 준 `Retry-After`(초)를 우선하고 없으면 `VOICE_ANALYSIS_RETRY_BASE_SECONDS × 2^(시도-1)`입니다. ai 호출 timeout은 재시도하지 않습니다.
 - **분석 중 거절**: ai는 분석을 한 번에 하나만 합니다. 다른 분석 중이라 `503 VOICE_BUSY`로 거절하면(예: 워커 재시작 직후 같은 작업을 다시 보낸 경우) 시도 횟수에 넣지 않고 `Retry-After`(보통 60초) 뒤에 다시 보냅니다. 첫 처리 시작부터 `VOICE_ANALYSIS_BUSY_MAX_WAIT_SECONDS`(기본 3600초)가 지나도 계속 거절되면 `VOICE_BUSY`로 실패 처리합니다.
@@ -125,8 +140,8 @@ uvicorn app.main:app --reload
 | `GET /api/v1/auth/me`             | 내 정보 조회 (`Authorization: Bearer <token>`) |
 | `POST /api/v1/emotion/infer`      | 외부 AI 서비스로 감정 분석 요청       |
 | `POST /api/v1/voice/enroll`       | 목소리 등록 (multipart `file`, 인증 필요) |
-| `POST /api/v1/voice/analyses`     | 음성 분석 작업 등록, 202 (multipart `file`, 인증 필요) |
-| `GET /api/v1/voice/analyses/{job_id}` | 음성 분석 상태·결과 조회 (본인 작업만) |
+| `POST /api/v1/voice/analyses`     | 음성 분석 작업 등록, 202 (multipart `file`, `customer_id` 필수, `kind`·`title`·`occurred_at` 선택, 인증 필요) |
+| `GET /api/v1/voice/analyses/{job_id}` | 음성 분석 상태·결과와 대화 정보 조회 (본인 작업만) |
 | `POST /api/v1/images`             | 이미지 업로드, 201 (multipart `file`, 인증 필요) |
 | `GET /api/v1/images/{image_id}`   | 이미지 정보와 서명 URL 조회 (본인 것만) |
 | `DELETE /api/v1/images/{image_id}` | 이미지 삭제 (본인 것만)              |
