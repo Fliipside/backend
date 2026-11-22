@@ -46,12 +46,19 @@ class VoiceEnrollResponse(BaseModel):
 
 class VoiceAnalysisCreateResponse(BaseModel):
     job_id: UUID
+    interaction_id: UUID
     status: str
     create_at: datetime
 
 
 class VoiceAnalysisResponse(BaseModel):
     job_id: UUID
+    # The five fields below are null for jobs created before interactions existed.
+    interaction_id: UUID | None
+    customer_id: int | None
+    kind: str | None
+    title: str | None
+    occurred_at: datetime | None
     status: str
     original_filename: str
     used_voiceprint: bool

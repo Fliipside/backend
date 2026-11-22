@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -56,8 +56,25 @@ async def create_analysis(
     storage: Annotated[ObjectStorage, Depends(get_object_storage)],
     queue: Annotated[RedisJobQueue, Depends(get_voice_analysis_queue)],
     settings: Annotated[Settings, Depends(get_settings_from_app)],
+    # Read as plain text and checked in the service, so a bad value is a 400
+    # with a message that names the field.
+    customer_id: Annotated[str | None, Form()] = None,
+    kind: Annotated[str | None, Form()] = None,
+    title: Annotated[str | None, Form()] = None,
+    occurred_at: Annotated[str | None, Form()] = None,
 ) -> ApiResponse[VoiceAnalysisCreateResponse]:
-    result = await create_voice_analysis(file, user, session, storage, queue, settings)
+    result = await create_voice_analysis(
+        file,
+        user,
+        session,
+        storage,
+        queue,
+        settings,
+        customer_id=customer_id,
+        kind=kind,
+        title=title,
+        occurred_at=occurred_at,
+    )
     return ApiResponse[VoiceAnalysisCreateResponse].ok(
         data=result,
         code="ACCEPTED",
