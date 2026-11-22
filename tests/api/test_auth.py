@@ -25,6 +25,7 @@ SIGNUP_PAYLOAD = {
     "email": "User@Example.com",
     "password": "password1234",
     "nickname": "tester",
+    "company": "  Flipside  ",
 }
 
 
@@ -101,7 +102,32 @@ def test_signup_creates_user_with_normalized_email(client: TestClient) -> None:
     assert body["success"] is True
     assert body["data"]["email"] == "user@example.com"
     assert body["data"]["nickname"] == "tester"
+    assert body["data"]["company"] == "Flipside"
     assert "password" not in str(body["data"])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"company": None},
+        {"company": "   "},
+        {"company": "c" * 101},
+        {"password": "12345678"},
+        {"password": "abcdefgh"},
+    ],
+)
+def test_signup_rejects_missing_company_and_weak_password(
+    client: TestClient,
+    change: dict[str, str | None],
+) -> None:
+    payload = {**SIGNUP_PAYLOAD, **change}
+    if payload["company"] is None:
+        del payload["company"]
+
+    response = client.post("/api/v1/auth/signup", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "INVALID_REQUEST"
 
 
 def test_signup_rejects_duplicate_email(client: TestClient) -> None:
@@ -123,6 +149,7 @@ def test_login_and_get_me(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["data"]["email"] == "user@example.com"
+    assert response.json()["data"]["company"] == "Flipside"
 
 
 def test_login_rejects_wrong_password(client: TestClient) -> None:
@@ -517,6 +544,24 @@ def test_password_reset_confirm_rejects_wrong_code(
         json={"email": "user@example.com", "password": "password1234"},
     )
     assert login.status_code == 200
+
+
+@pytest.mark.parametrize("new_password", ["12345678", "abcdefgh"])
+def test_password_reset_confirm_rejects_password_without_letter_and_digit(
+    client: TestClient,
+    new_password: str,
+) -> None:
+    response = client.post(
+        RESET_CONFIRM,
+        json={
+            "email": "user@example.com",
+            "code": "123456",
+            "new_password": new_password,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "INVALID_REQUEST"
 
 
 def test_signup_code_cannot_reset_password(

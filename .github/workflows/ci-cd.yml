@@ -91,6 +91,8 @@ jobs:
             set -e
             cd ~/flipside
             docker compose pull backend backend-worker
+            # 새 이미지로 DB 마이그레이션을 먼저 적용한다. 실패하면 컨테이너를 교체하지 않는다.
+            docker compose run --rm backend alembic upgrade head
             docker compose up -d backend backend-worker
             docker image prune -f
             for i in $(seq 1 10); do
