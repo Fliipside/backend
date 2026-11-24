@@ -33,7 +33,7 @@ app/
        → interactions 행과 voice_analysis_jobs 행(queued)을 한 트랜잭션으로 생성
        → Redis 큐에 job_id 등록 → 202 (job_id, interaction_id)
 워커 → 큐에서 job_id를 꺼냄(processing) → 녹음 다운로드 → ai POST voice/analyze 호출
-       → 성공: succeeded + result 저장 / 실패: failed + error_code / 일시 오류: 지연 후 재시도
+       → 성공: succeeded + result 저장, 대화 기억 처리 큐에 등록 / 실패: failed + error_code / 일시 오류: 지연 후 재시도
 앱 → GET /api/v1/voice/analyses/{job_id}  (본인 작업만 조회)
 ```
 
@@ -67,6 +67,39 @@ app/
 ```bash
 python -m app.workers.voice_analysis
 ```
+
+## 대화 기억 처리 큐 (memory ingest)
+
+분석이 끝난 대화는 대화 기억 처리(정보 추출, 검색용 벡터 저장)로 넘어갑니다. 이 저장소에는 **큐에 넣는 쪽만** 있습니다. 큐에서 꺼내 처리하는 워커는 아직 없고, 아래 내용을 보고 만듭니다.
+
+```text
+음성 워커 → 분석 성공: voice_analysis_jobs를 succeeded로 바꾸는 같은 트랜잭션에서
+              memory_ingest_jobs 행(queued) 생성 → 커밋 → Redis 큐에 memory_ingest_jobs.id 등록
+꺼내는 워커 → 큐에서 id를 꺼냄 → memory_ingest_jobs 행에서 voice_job_id, interaction_id를 읽음
+              → voice_analysis_jobs.result(대화록)를 읽어 처리 → 결과를 interaction_id 아래에 저장
+```
+
+- **큐 이름**: `flipside:memory-ingest` (코드: `app/models/memory.py`의 `MEMORY_INGEST_QUEUE`). `app/clients/job_queue.py`의 `RedisJobQueue`를 그대로 씁니다. Redis 키는 `flipside:memory-ingest:pending`(대기 목록), `:processing`(처리 중), `:delayed`(재시도 대기, sorted set)이고 만료(TTL)는 없습니다.
+- **큐에 들어가는 값**: `memory_ingest_jobs.id`(UUID 문자열) 하나뿐입니다. 예: `"3f0c1f0e-6a5b-4d0e-9a51-0c8a5d2f7b11"`. `voice_job_id`와 `interaction_id`는 큐에 넣지 않으므로 그 행에서 읽습니다.
+- **`memory_ingest_jobs` 테이블** (이 테이블이 원본이고, Redis에는 id만 있습니다):
+
+  | 컬럼 | 뜻 |
+  | --- | --- |
+  | `id` | UUID. 큐에 들어가는 값 |
+  | `voice_job_id` | `voice_analysis_jobs.id`. 유일(음성 작업 1건에 행 1개). 대화록은 이 작업의 `result`(`speakers`, `utterances`)에 있습니다 |
+  | `interaction_id` | `interactions.id`. 처리 결과를 저장할 대화. 고객은 `interactions.customer_id`, 사용자는 `interactions.owner_user_id`입니다 |
+  | `status` | `queued`(대기) → `processing`(처리 중) → `succeeded` 또는 `failed`. 음성 워커는 `queued`로 만들기만 합니다 |
+  | `attempts` | 처리 시도 횟수. 0으로 만듭니다 |
+  | `error_code`, `error_message` | 실패 사유. `NULL`로 만듭니다 |
+  | `create_at`, `update_at` | 행 생성·수정 시각 |
+  | `started_at`, `finished_at` | 처리 시작·종료 시각. `NULL`로 만듭니다 |
+
+  `status`를 `processing` 이후로 바꾸는 것과 `attempts`, `error_*`, `started_at`, `finished_at`을 채우는 것은 꺼내는 워커의 몫입니다.
+- **넣는 조건**: 음성 분석이 `succeeded`가 된 작업만 넣습니다. 실패했거나 재시도 대기 중인 작업은 넣지 않습니다. `interaction_id`가 `NULL`인 예전 작업은 결과를 저장할 대화가 없으므로 성공해도 넣지 않습니다.
+- **중복 없음**: `voice_job_id`가 유일하고, 음성 워커는 행이 이미 있으면 새로 만들지 않습니다. 다만 큐가 같은 id를 한 번만 전달한다고 보장하지는 않으므로(워커가 처리 도중 멈추면 같은 id를 다시 꺼냅니다), 꺼내는 워커는 행의 `status`를 먼저 보고 `succeeded`·`failed`면 건너뛰어야 합니다.
+- **큐 등록 실패**: 커밋 뒤 Redis에 넣다가 실패해도 음성 분석은 `succeeded`로 두고 로그만 남깁니다. 행은 `queued`로 남습니다.
+- **재적재**: 음성 워커는 시작할 때 `status`가 `queued`인 행 중 Redis(`pending`, `processing`, `delayed` 어디에도)에 없는 id를 다시 넣습니다. `processing` 목록을 `pending`으로 되돌리는 것(`recover_processing`)과 `processing` 상태 행의 복구는 꺼내는 워커가 시작할 때 직접 합니다. 음성 워커는 이 큐의 `processing`을 건드리지 않습니다.
+- **삭제**: 음성 작업이나 대화가 삭제되면 `memory_ingest_jobs` 행도 함께 삭제됩니다. 큐에 남은 id로 행을 찾지 못하면 꺼내는 워커는 그 id를 버리면 됩니다.
 
 ## 이미지 업로드
 
