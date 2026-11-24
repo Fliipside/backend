@@ -86,6 +86,51 @@ python -m app.workers.voice_analysis
 - **바꾸기**: ① 새 이미지를 올리고 ② 새 `image_id`를 앱 데이터(예: 고객)에 저장한 뒤 ③ 저장이 성공하면 이전 `image_id`를 삭제합니다. 이전 이미지를 먼저 지우면 ②가 실패했을 때 앱 데이터가 이미 지워진 이미지를 가리키게 됩니다.
 - **삭제 순서**: 저장소 파일을 먼저 지우고 행을 지웁니다. 저장소 오류면 `503`을 돌려주고 행이 남으므로 다시 시도할 수 있습니다.
 
+
+## 대화 기억 연동 설정
+
+대화 기억 기능을 붙이기 전에 필요한 설정만 먼저 들어 있습니다. ai를 실제로 호출하는 코드는 아직 없으므로 아래 두 환경 변수는 지금은 어디에서도 읽지 않습니다.
+
+| 환경 변수 | 기본값 | 쓰일 곳 |
+| --- | --- | --- |
+| `AI_EXTRACT_TIMEOUT_SECONDS` | 540 | ai `POST /memory/extract` 호출 |
+| `AI_ASK_TIMEOUT_SECONDS` | 300 | ai `/ask` 호출 ("누적된 대화에 물어보세요" 입력창의 질문 API. ai에는 아직 없음) |
+
+- **540초인 이유**: ai는 `/memory/extract`에서 LLM을 최대 2번 부르고, ai 안에서 최대 약 480초로 제한합니다. backend가 그보다 먼저 연결을 끊어도 ai는 계속 실행돼 비용만 나가므로, backend는 ai의 제한보다 길게 기다립니다. 이 값을 480 아래로 낮추지 않습니다.
+- **호출별 timeout**: `AIServiceClient.post_json`과 `post_multipart`는 `timeout` 인자를 받습니다. 넘기지 않으면 `AI_SERVICE_TIMEOUT_SECONDS`(30)를 씁니다.
+- **프록시**: API 앞단에 프록시(nginx 등)가 있으면 프록시의 응답 대기 시간(`proxy_read_timeout` 등)도 이 값들보다 길어야 합니다. 짧으면 프록시가 먼저 끊습니다.
+
+### pgvector 확장과 배포
+
+대화 기억 검색은 같은 PostgreSQL의 pgvector를 씁니다. 마이그레이션 `e5b8d3c1f627`이 `CREATE EXTENSION IF NOT EXISTS vector`를 실행합니다(PostgreSQL일 때만). 벡터 컬럼과 테이블은 아직 만들지 않습니다. downgrade는 확장을 지우지 않습니다.
+
+배포할 때 `alembic upgrade head`가 자동으로 실행되므로, **이 마이그레이션이 처음 배포되기 전에 서버 DB가 준비돼 있어야 합니다.** 준비가 안 돼 있으면 다음과 같이 됩니다.
+
+| 서버 DB 상태 | 오류 메시지 |
+| --- | --- |
+| DB 서버에 pgvector가 설치돼 있지 않음 | `extension "vector" is not available` |
+| 설치는 돼 있지만 `POSTGRES_USER` 계정에 확장을 만들 권한이 없음 | `permission denied to create extension "vector"` |
+
+- 두 경우 모두 배포의 `alembic upgrade head` 단계에서 멈추고 GitHub Actions의 deploy 작업이 실패합니다.
+- 컨테이너는 교체되지 않아 **이전 버전의 서버와 워커가 그대로 계속 동작합니다.**
+- 마이그레이션은 하나의 트랜잭션으로 실행되므로, 같은 배포에 함께 들어 있던 다른 마이그레이션도 전부 되돌려집니다. DB는 배포 전 상태 그대로입니다.
+- 문제를 해결하기 전까지는 **이후의 모든 배포가 같은 자리에서 실패합니다.**
+- 새 이미지는 이미 서버에 내려받아진 상태입니다. 이때 서버에서 직접 `docker compose up -d`를 실행하면 마이그레이션이 적용되지 않은 채 새 버전이 뜨므로 실행하지 않습니다.
+
+해결 방법:
+
+1. DB 서버에 pgvector를 설치합니다. 패키지로 설치한 PostgreSQL은 버전에 맞는 `postgresql-<버전>-pgvector` 패키지를, Docker는 `pgvector/pgvector:pg<버전>` 이미지를 씁니다.
+2. superuser로 서비스 DB에 접속해 한 번 실행합니다.
+
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS vector;
+   ```
+
+3. GitHub Actions에서 deploy 작업을 다시 실행합니다.
+
+확장이 이미 만들어져 있으면 마이그레이션은 아무 일도 하지 않고 통과하므로, `POSTGRES_USER` 계정에 superuser 권한을 줄 필요는 없습니다. 준비 여부는 `SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';`로 확인합니다.
+
+
 ## 고객
 
 고객 1건은 사용자가 만나는 상대 회사의 담당자 1명입니다. 화면에는 "노바테크 / IT·솔루션 · 김민준 사업개발팀 부장"처럼 나옵니다. 녹음 업로드가 받을 `customer_id`가 이 테이블의 `id`를 가리킵니다.
@@ -102,6 +147,7 @@ python -m app.workers.voice_analysis
 - **수정**: 본문에 넣은 항목만 바뀝니다. 선택 항목은 `null`이나 빈 문자열을 보내 비울 수 있고, 필수 항목에 `null`이나 빈 값을 보내면 `422`입니다.
 - **소유자**: 로그인한 사용자가 등록한 고객만 다룹니다. 없는 id와 다른 사용자의 고객 id는 똑같이 `404 CUSTOMER_NOT_FOUND`입니다. 사용자를 삭제하면 그 사용자의 고객도 함께 삭제됩니다.
 - **목록**: 한 번에 전부 돌려줍니다. 검색, 페이지 나누기, 삭제 API는 아직 없습니다.
+
 
 ## 로컬 실행
 

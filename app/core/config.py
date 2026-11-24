@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     ai_service_timeout_seconds: float = Field(default=30.0, gt=0)
     ai_enroll_timeout_seconds: float = Field(default=120.0, gt=0)
     ai_analyze_timeout_seconds: float = Field(default=1800.0, gt=0)
+    ai_extract_timeout_seconds: float = Field(default=540.0, gt=0)
+    ai_ask_timeout_seconds: float = Field(default=300.0, gt=0)
     s3_endpoint_url: str = ""
     s3_region: str = ""
     s3_bucket: str = ""

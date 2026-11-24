@@ -53,6 +53,55 @@ def test_post_json_sends_request_and_returns_payload() -> None:
     asyncio.run(run_test())
 
 
+def test_post_json_sends_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/memory/extract"
+        assert request.extensions["timeout"]["read"] == 540.0
+
+        return httpx.Response(status_code=200, json={"success": True, "data": {}})
+
+    async def run_test() -> None:
+        transport = httpx.MockTransport(handler)
+
+        async with httpx.AsyncClient(
+            base_url="http://ai-service.test",
+            transport=transport,
+            timeout=30,
+        ) as http_client:
+            client = AIServiceClient(http_client)
+
+            result = await client.post_json(
+                "memory/extract",
+                payload={"text": "테스트"},
+                timeout=540.0,
+            )
+
+        assert result == {"success": True, "data": {}}
+
+    asyncio.run(run_test())
+
+
+def test_post_json_uses_client_timeout_by_default() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 30
+
+        return httpx.Response(status_code=200, json={"success": True, "data": {}})
+
+    async def run_test() -> None:
+        transport = httpx.MockTransport(handler)
+
+        async with httpx.AsyncClient(
+            base_url="http://ai-service.test",
+            transport=transport,
+            timeout=30,
+        ) as http_client:
+            client = AIServiceClient(http_client)
+
+            await client.post_json("emotion/infer", payload={"text": "테스트"})
+
+    asyncio.run(run_test())
+
+
 def test_post_file_sends_multipart_request() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"

@@ -21,8 +21,13 @@ class AIServiceClient:
             self,
             path: str,
             payload: dict[str, Any],
+            timeout: float | None = None,
     ) -> dict[str, Any]:
-        return await self._request("POST", path, json=payload)
+        """Send a JSON body. timeout overrides the client default."""
+        kwargs: dict[str, Any] = {"json": payload}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return await self._request("POST", path, **kwargs)
 
     async def post_file(
             self,
