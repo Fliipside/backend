@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.interaction import Interaction
 from app.models.voice import VoiceAnalysisJob, VoiceAnalysisStatus, Voiceprint
 
 
@@ -33,6 +34,7 @@ async def create_voice_analysis_job(
         *,
         job_id: UUID,
         user_id: UUID,
+        interaction_id: UUID,
         object_key: str,
         original_filename: str,
         content_type: str | None,
@@ -41,6 +43,7 @@ async def create_voice_analysis_job(
     job = VoiceAnalysisJob(
         id=job_id,
         user_id=user_id,
+        interaction_id=interaction_id,
         status=VoiceAnalysisStatus.QUEUED,
         object_key=object_key,
         original_filename=original_filename,
@@ -65,14 +68,18 @@ async def get_user_voice_analysis_job(
         *,
         job_id: UUID,
         user_id: UUID,
-) -> VoiceAnalysisJob | None:
+) -> tuple[VoiceAnalysisJob, Interaction | None] | None:
+    """Return the job with its interaction (None for jobs that have none)."""
     result = await session.execute(
-        select(VoiceAnalysisJob).where(
+        select(VoiceAnalysisJob, Interaction)
+        .outerjoin(Interaction, Interaction.id == VoiceAnalysisJob.interaction_id)
+        .where(
             VoiceAnalysisJob.id == job_id,
             VoiceAnalysisJob.user_id == user_id,
         )
     )
-    return result.scalar_one_or_none()
+    row = result.one_or_none()
+    return None if row is None else (row[0], row[1])
 
 
 async def list_unfinished_job_ids(session: AsyncSession) -> list[UUID]:
