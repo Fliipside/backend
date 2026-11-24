@@ -148,6 +148,25 @@ class ImageNotFoundError(AppError):
                 message="이미지를 찾을 수 없습니다.",
             )
 
+class CustomerNotFoundError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=404,
+                code="CUSTOMER_NOT_FOUND",
+                message="고객을 찾을 수 없습니다.",
+            )
+
+class InvalidRequestError(AppError):
+    """A request value is wrong and the reason is worth telling the client."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message=message,
+            )
+
 class ServiceNotConfiguredError(AppError):
 
     def __init__(self, service: str) -> None:
