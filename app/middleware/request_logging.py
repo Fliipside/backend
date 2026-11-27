@@ -15,6 +15,9 @@ def register_request_logging_middleware(app: FastAPI) -> None:
     ) -> Response:
         request_id = str(uuid4())
         request.state.request_id = request_id
+        # 프록시 뒤에서는 uvicorn이 신뢰하는 프록시(FORWARDED_ALLOW_IPS)의
+        # X-Forwarded-For 값으로 request.client를 바꿔 준다.
+        client_ip = request.client.host if request.client else "-"
 
         started_at = time.perf_counter()
 
@@ -25,9 +28,10 @@ def register_request_logging_middleware(app: FastAPI) -> None:
 
             logger.exception(
                 "request_failed "
-                "request_id=%s method=%s path=%s "
+                "request_id=%s client_ip=%s method=%s path=%s "
                 "status_code=500 duration_ms=%.2f",
                 request_id,
+                client_ip,
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -47,9 +51,10 @@ def register_request_logging_middleware(app: FastAPI) -> None:
         logger.log(
             log_level,
             "request_completed "
-            "request_id=%s method=%s path=%s "
+            "request_id=%s client_ip=%s method=%s path=%s "
             "status_code=%d duration_ms=%.2f",
             request_id,
+            client_ip,
             request.method,
             request.url.path,
             response.status_code,

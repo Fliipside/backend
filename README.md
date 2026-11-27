@@ -57,7 +57,7 @@ app/
 - **분석 중 거절**: ai는 분석을 한 번에 하나만 합니다. 다른 분석 중이라 `503 VOICE_BUSY`로 거절하면(예: 워커 재시작 직후 같은 작업을 다시 보낸 경우) 시도 횟수에 넣지 않고 `Retry-After`(보통 60초) 뒤에 다시 보냅니다. 첫 처리 시작부터 `VOICE_ANALYSIS_BUSY_MAX_WAIT_SECONDS`(기본 3600초)가 지나도 계속 거절되면 `VOICE_BUSY`로 실패 처리합니다.
 - **녹음 길이**: 길이 제한은 ai가 판단합니다. 60분을 넘는 녹음은 ai가 `400 AUDIO_TOO_LONG`으로 거절하고, 재시도 없이 "녹음이 60분을 넘어 분석할 수 없습니다."로 실패 처리합니다.
 - **화자 이름**: ai가 정한 이름을 그대로 저장합니다. "나"는 `me`, 나머지는 처음 말한 순서대로 `A`, `B`, `C`…(26명 넘으면 `AA`, `AB`…)입니다. 목소리 미등록 등으로 "나"를 찾지 못하면 모두 `A`부터 붙고 role은 `unknown`입니다.
-- **파일 크기**: 녹음은 `VOICE_RECORDING_MAX_BYTES`(기본 1GB)까지 받습니다. 길이 제한은 ai가 하므로 이 값은 서버 보호용 상한입니다. 60분 기준 m4a는 약 60MB, 44.1kHz 스테레오 WAV는 약 635MB, 48kHz 24bit 스테레오는 약 1GB입니다. API 앞단에 프록시(nginx 등)가 있으면 업로드 크기 제한(`client_max_body_size` 등)도 같은 값으로 맞춰야 합니다. 업로드 파일은 API 서버의 임시 디스크와 워커의 임시 파일에 한 번씩 저장되므로 서버 디스크 여유도 필요합니다.
+- **파일 크기**: 녹음은 `VOICE_RECORDING_MAX_BYTES`(기본 1GB)까지 받습니다. 길이 제한은 ai가 하므로 이 값은 서버 보호용 상한입니다. 60분 기준 m4a는 약 60MB, 44.1kHz 스테레오 WAV는 약 635MB, 48kHz 24bit 스테레오는 약 1GB입니다. API 앞단의 nginx 업로드 크기 제한(`deploy/nginx/flipside.conf`의 `client_max_body_size`)도 이 값에 맞춰야 합니다. 업로드 파일은 API 서버의 임시 디스크와 워커의 임시 파일에 한 번씩 저장되므로 서버 디스크 여유도 필요합니다.
 - **녹음 원본**은 `voice-recordings/{user_id}/{job_id}.{확장자}`에 저장하고 분석 후에도 보관합니다.
 - **timeout**: 분석은 `AI_ANALYZE_TIMEOUT_SECONDS`(기본 1800), 목소리 등록은 `AI_ENROLL_TIMEOUT_SECONDS`(기본 120)를 씁니다. 다른 AI 호출은 `AI_SERVICE_TIMEOUT_SECONDS`(30)를 그대로 씁니다.
 - **목소리 등록**(`POST /api/v1/voice/enroll`)은 동기 호출입니다. ai가 돌려준 `engine`과 256차원 `vector`를 `voiceprints` 테이블에 사용자당 하나 저장하고(JSONB. 벡터 비교는 ai가 하므로 pgvector를 쓰지 않음), 분석할 때 `voiceprint` form 필드로 함께 보냅니다.
@@ -252,3 +252,36 @@ docker run --rm -p 8000:8000 flipside-backend
 ```
 
 이미지에 `.env`가 들어 있으므로 워커도 API와 같은 설정을 씁니다. `depends_on` 등은 서버 compose의 서비스 이름에 맞춰 추가합니다.
+
+## HTTPS 프록시 (nginx)
+
+외부 요청은 서버의 nginx가 80/443에서 받아 TLS를 종료하고 backend 컨테이너(`127.0.0.1:8000`)로 넘깁니다. 인증서는 certbot이 Let's Encrypt에서 발급해 자동으로 갱신하고, http 요청은 https로 리다이렉트됩니다. 설정은 [deploy/nginx/flipside.conf](deploy/nginx/flipside.conf)에 있습니다.
+
+- 이 nginx는 서버에 직접 설치돼 있고 다른 서비스도 함께 씁니다. 이 저장소는 `www.flipside.o-r.kr`의 `server` 블록만 관리합니다.
+- nginx 설정은 CI가 배포하지 않습니다. 파일을 고치면 서버의 `/etc/nginx/sites-available/flipside.conf`에 직접 복사한 뒤 `sudo nginx -t && sudo systemctl reload nginx`로 반영합니다.
+- 경로를 추가할 때는 `location` 블록을, 서브도메인을 추가할 때는 `server` 블록을 추가합니다. 예시는 설정 파일의 주석에 있습니다.
+- 업로드 크기 상한(`client_max_body_size`)은 `VOICE_RECORDING_MAX_BYTES`에 맞춰 두었습니다. 그 값을 올리면 여기도 함께 올립니다.
+
+처음 설치할 때는 인증서를 먼저 발급합니다. 설정 파일이 인증서 경로를 참조하므로 순서를 바꾸면 nginx가 설정 검사에서 실패합니다.
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot certonly --nginx -d www.flipside.o-r.kr --deploy-hook "systemctl reload nginx"
+sudo cp flipside.conf /etc/nginx/sites-available/flipside.conf
+sudo ln -s /etc/nginx/sites-available/flipside.conf /etc/nginx/sites-enabled/flipside.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+서버 compose의 `backend`에는 다음 두 항목이 있어야 합니다.
+
+```yaml
+  backend:
+    ports:
+      - "127.0.0.1:8000:8000" # 서버 안에서만 접근. nginx와 CI 헬스 체크가 이 포트를 쓴다.
+    environment:
+      FORWARDED_ALLOW_IPS: "*" # nginx가 넘긴 X-Forwarded-For/Proto를 uvicorn이 신뢰한다.
+```
+
+- `FORWARDED_ALLOW_IPS`를 넣지 않으면 uvicorn이 프록시 헤더를 무시해서, 로그의 클라이언트 IP가 Docker 내부 IP로 남고 FastAPI가 만드는 리다이렉트 주소가 `http://`가 됩니다.
+- `"*"`는 8000 포트에 서버 자신만 접근할 수 있을 때 안전합니다. 그래서 `ports`를 `127.0.0.1`에 묶습니다.
+- CI의 헬스 체크(`http://127.0.0.1:8000/health`)는 위 `ports` 설정으로 그대로 동작합니다. `ports`를 지우면 배포가 실패로 끝납니다.
