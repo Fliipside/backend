@@ -264,3 +264,24 @@ class EmailDailyLimitError(AppError):
                 code="EMAIL_DAILY_LIMIT_EXCEEDED",
                 message="오늘 보낼 수 있는 이메일 수를 초과했습니다. 내일 다시 시도해 주세요.",
             )
+
+
+class AccountNotFoundError(AppError):
+
+    def __init__(self) -> None:
+        super().__init__(
+                status_code=404,
+                code="ACCOUNT_NOT_FOUND",
+                message="일치하는 회원 정보가 없습니다.",
+            )
+
+
+class FindIdLimitError(AppError):
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+                status_code=429,
+                code="FIND_ID_LIMIT_EXCEEDED",
+                message="아이디 찾기 시도 횟수를 초과했습니다. 잠시 후 다시 시도해 주세요.",
+                headers={"Retry-After": str(retry_after_seconds)},
+            )

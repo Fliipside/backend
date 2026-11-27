@@ -25,6 +25,8 @@ SIGNUP_PAYLOAD = {
     "email": "User@Example.com",
     "password": "password1234",
     "nickname": "tester",
+    "name": " 홍길동 ",
+    "phone": "010-1234-5678",
     "company": "  Flipside  ",
 }
 
@@ -103,6 +105,8 @@ def test_signup_creates_user_with_normalized_email(client: TestClient) -> None:
     assert body["data"]["email"] == "user@example.com"
     assert body["data"]["nickname"] == "tester"
     assert body["data"]["company"] == "Flipside"
+    assert body["data"]["name"] == "홍길동"
+    assert body["data"]["phone"] == "01012345678"
     assert "password" not in str(body["data"])
 
 
@@ -114,6 +118,11 @@ def test_signup_creates_user_with_normalized_email(client: TestClient) -> None:
         {"company": "c" * 101},
         {"password": "12345678"},
         {"password": "abcdefgh"},
+        {"name": None},
+        {"name": "  "},
+        {"phone": None},
+        {"phone": "02-123-4567"},
+        {"phone": "010-1234-567a"},
     ],
 )
 def test_signup_rejects_missing_company_and_weak_password(
@@ -121,8 +130,9 @@ def test_signup_rejects_missing_company_and_weak_password(
     change: dict[str, str | None],
 ) -> None:
     payload = {**SIGNUP_PAYLOAD, **change}
-    if payload["company"] is None:
-        del payload["company"]
+    for field in ("company", "name", "phone"):
+        if payload[field] is None:
+            del payload[field]
 
     response = client.post("/api/v1/auth/signup", json=payload)
 
@@ -586,3 +596,212 @@ def test_email_endpoints_return_503_without_email_sender(client: TestClient) -> 
     response = client.post(VERIFY_REQUEST, json={"email": NEW_EMAIL})
 
     assert response.status_code == 503
+
+
+FIND_ID = "/api/v1/auth/find-id"
+FIND_ID_PAYLOAD = {"name": "홍길동", "phone": "010-1234-5678"}
+
+
+def signup_as(client: TestClient, email: str, **change: str) -> None:
+    mark_email_verified(client, email)
+    response = client.post(
+        "/api/v1/auth/signup",
+        json={**SIGNUP_PAYLOAD, "email": email, **change},
+    )
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("email", "masked"),
+    [
+        ("assff11@gmail.com", "as********@gmail.com"),
+        ("verylongaddress123@naver.com", "ve********@naver.com"),
+        ("ab@company.com", "ab********@company.com"),
+        ("a@company.com", "a*********@company.com"),
+    ],
+)
+def test_mask_email_keeps_two_characters_and_pads_to_ten(
+    email: str,
+    masked: str,
+) -> None:
+    assert auth_service.mask_email(email) == masked
+
+
+def test_find_id_mails_email_and_returns_masked_email(
+    client: TestClient,
+    email_sender: FakeEmailSender,
+    database_path: Path,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+
+    response = client.post(FIND_ID, json={"name": "홍길동 ", "phone": "01012345678"})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"emails": ["us********@example.com"]}
+    assert email_sender.sent[-1]["to"] == "user@example.com"
+    assert "아이디 안내" in email_sender.sent[-1]["subject"]
+    assert "user@example.com" in email_sender.sent[-1]["text"]
+    logs = email_logs(database_path)
+    assert [(log["purpose"], log["status"]) for log in logs] == [("find_id", "sent")]
+
+
+def test_find_id_returns_every_matching_account(
+    client: TestClient,
+    email_sender: FakeEmailSender,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+    signup_as(client, "a@company.com")
+
+    response = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["emails"] == [
+        "us********@example.com",
+        "a*********@company.com",
+    ]
+    assert sorted(mail["to"] for mail in email_sender.sent) == [
+        "a@company.com",
+        "user@example.com",
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "김철수", "phone": "010-1234-5678"},
+        {"name": "홍길동", "phone": "010-9999-9999"},
+    ],
+)
+def test_find_id_returns_404_when_nothing_matches(
+    client: TestClient,
+    email_sender: FakeEmailSender,
+    payload: dict[str, str],
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+
+    response = client.post(FIND_ID, json=payload)
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "success": False,
+        "code": "ACCOUNT_NOT_FOUND",
+        "message": "일치하는 회원 정보가 없습니다.",
+        "data": None,
+    }
+    assert email_sender.sent == []
+
+
+def test_find_id_treats_inactive_user_as_not_found(
+    client: TestClient,
+    email_sender: FakeEmailSender,
+    database_path: Path,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(update(User).values(is_active=False))
+    engine.dispose()
+
+    response = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "ACCOUNT_NOT_FOUND"
+    assert email_sender.sent == []
+
+
+def test_find_id_ignores_users_without_name_and_phone(
+    client: TestClient,
+    database_path: Path,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(update(User).values(name="", phone=""))
+    engine.dispose()
+
+    response = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "홍길동"},
+        {"phone": "010-1234-5678"},
+        {"name": " ", "phone": "010-1234-5678"},
+        {"name": "홍길동", "phone": "1234"},
+    ],
+)
+def test_find_id_rejects_invalid_request(
+    client: TestClient,
+    payload: dict[str, str],
+) -> None:
+    response = client.post(FIND_ID, json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "INVALID_REQUEST"
+
+
+def test_find_id_limits_attempts_per_phone_whether_or_not_it_matches(
+    client: TestClient,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+    client.app.state.settings.find_id_phone_daily_limit = 2
+
+    first = client.post(FIND_ID, json={"name": "김철수", "phone": "010-1234-5678"})
+    second = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+    blocked = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+    other_phone = client.post(FIND_ID, json={"name": "홍길동", "phone": "010-9999-9999"})
+
+    assert first.status_code == 404
+    assert second.status_code == 200
+    assert blocked.status_code == 429
+    assert blocked.json()["code"] == "FIND_ID_LIMIT_EXCEEDED"
+    assert 1 <= int(blocked.headers["Retry-After"]) <= 24 * 60 * 60
+    assert other_phone.status_code == 404
+
+
+def test_find_id_limits_attempts_per_client_ip(client: TestClient) -> None:
+    client.app.state.settings.find_id_ip_hourly_limit = 2
+
+    for index in range(2):
+        response = client.post(
+            FIND_ID,
+            json={"name": "홍길동", "phone": f"010-0000-000{index}"},
+        )
+        assert response.status_code == 404
+    blocked = client.post(FIND_ID, json={"name": "홍길동", "phone": "010-0000-0009"})
+
+    assert blocked.status_code == 429
+    assert blocked.json()["code"] == "FIND_ID_LIMIT_EXCEEDED"
+    assert 1 <= int(blocked.headers["Retry-After"]) <= 60 * 60
+
+
+def test_find_id_does_not_resend_within_cooldown(
+    client: TestClient,
+    email_sender: FakeEmailSender,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+
+    first = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+    second = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+
+    assert first.status_code == second.status_code == 200
+    assert second.json() == first.json()
+    assert len(email_sender.sent) == 1
+
+
+def test_find_id_stops_at_daily_total(
+    client: TestClient,
+    email_sender: FakeEmailSender,
+) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP_PAYLOAD)
+    for index in range(5):
+        client.post(VERIFY_REQUEST, json={"email": f"user{index}@example.com"})
+
+    response = client.post(FIND_ID, json=FIND_ID_PAYLOAD)
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "EMAIL_DAILY_LIMIT_EXCEEDED"
+    assert len(email_sender.sent) == 5

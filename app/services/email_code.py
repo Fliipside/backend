@@ -4,6 +4,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html import escape
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 PURPOSE_SIGNUP = "signup_verification"
 PURPOSE_PASSWORD_RESET = "password_reset"
+PURPOSE_FIND_ID = "find_id"
 
 CODE_LENGTH = 6
 DAILY_COUNTER_EXPIRE_SECONDS = 2 * 24 * 60 * 60
@@ -96,26 +98,13 @@ async def issue_code(
     The limits run for every request, whether or not an email is sent afterwards,
     so the response does not reveal if the address belongs to a user.
     """
-    total = await redis.get(_daily_total_key())
-    if total is not None and int(total) >= settings.email_daily_send_limit:
-        raise EmailDailyLimitError
+    await check_daily_total(redis, settings)
 
-    cooldown_key = _cooldown_key(purpose, email)
-    started = await redis.set(
-        cooldown_key,
-        "1",
-        ex=settings.email_code_resend_cooldown_seconds,
-        nx=True,
-    )
-    if not started:
-        remaining = await redis.ttl(cooldown_key)
-        raise EmailResendCooldownError(max(int(remaining), 1))
+    cooldown_left = await _start_cooldown(redis, purpose, email, settings)
+    if cooldown_left:
+        raise EmailResendCooldownError(cooldown_left)
 
-    recipient_key = _daily_recipient_key(email)
-    recipient_count = await redis.incr(recipient_key)
-    if recipient_count == 1:
-        await redis.expire(recipient_key, DAILY_COUNTER_EXPIRE_SECONDS)
-    if recipient_count > settings.email_recipient_daily_limit:
+    if not await _count_recipient(redis, email, settings):
         raise EmailRecipientLimitError
 
     code = f"{secrets.randbelow(10 ** CODE_LENGTH):0{CODE_LENGTH}d}"
@@ -128,6 +117,57 @@ async def issue_code(
         pipe.delete(_attempts_key(purpose, email))
         await pipe.execute()
     return code
+
+
+async def check_daily_total(redis: Redis, settings: Settings) -> None:
+    total = await redis.get(_daily_total_key())
+    if total is not None and int(total) >= settings.email_daily_send_limit:
+        raise EmailDailyLimitError
+
+
+async def _start_cooldown(
+        redis: Redis,
+        purpose: str,
+        email: str,
+        settings: Settings,
+) -> int:
+    """Start the resend cooldown. Returns 0 when it started, else seconds left."""
+    cooldown_key = _cooldown_key(purpose, email)
+    started = await redis.set(
+        cooldown_key,
+        "1",
+        ex=settings.email_code_resend_cooldown_seconds,
+        nx=True,
+    )
+    if started:
+        return 0
+    remaining = await redis.ttl(cooldown_key)
+    return max(int(remaining), 1)
+
+
+async def _count_recipient(redis: Redis, email: str, settings: Settings) -> bool:
+    """Count one send to this address. False when today's limit is used up."""
+    recipient_key = _daily_recipient_key(email)
+    recipient_count = await redis.incr(recipient_key)
+    if recipient_count == 1:
+        await redis.expire(recipient_key, DAILY_COUNTER_EXPIRE_SECONDS)
+    return recipient_count <= settings.email_recipient_daily_limit
+
+
+async def reserve_send(
+        redis: Redis,
+        purpose: str,
+        email: str,
+        settings: Settings,
+) -> bool:
+    """Apply the per-address limits without raising. False means skip this send.
+
+    For mails that are a notice rather than a code: a skipped address already got
+    the same mail within the cooldown, or has used up today's limit.
+    """
+    if await _start_cooldown(redis, purpose, email, settings):
+        return False
+    return await _count_recipient(redis, email, settings)
 
 
 async def discard_code(redis: Redis, purpose: str, email: str) -> None:
@@ -175,11 +215,29 @@ async def clear_email_verified(redis: Redis, email: str) -> None:
     await redis.delete(_verified_key(email))
 
 
+EmailContent = tuple[str, str, str]
+
+
+def build_find_id_email(email: str) -> EmailContent:
+    subject = "[Flipside] 아이디 안내"
+    text = (
+        "Flipside 아이디 찾기 요청에 따라 아이디를 알려 드립니다.\n\n"
+        f"아이디: {email}\n\n"
+        "본인이 요청하지 않았다면 이 메일을 무시해 주세요."
+    )
+    html = (
+        "<p>Flipside 아이디 찾기 요청에 따라 아이디를 알려 드립니다.</p>"
+        f'<p style="font-size:20px;font-weight:bold">{escape(email)}</p>'
+        "<p>본인이 요청하지 않았다면 이 메일을 무시해 주세요.</p>"
+    )
+    return subject, text, html
+
+
 def build_code_email(
         purpose: str,
         code: str,
         settings: Settings,
-) -> tuple[str, str, str]:
+) -> EmailContent:
     title = EMAIL_TITLES[purpose]
     minutes = max(settings.email_code_expire_seconds // 60, 1)
     subject = f"[Flipside] {title} 안내"
@@ -203,8 +261,7 @@ async def create_email_job(
         redis: Redis,
         purpose: str,
         email: str,
-        code: str,
-        settings: Settings,
+        content: EmailContent,
 ) -> EmailJob:
     """Record the email as pending and count it against the daily total."""
     email_log = await email_log_repository.create_email_log(
@@ -218,7 +275,7 @@ async def create_email_job(
     if await redis.incr(total_key) == 1:
         await redis.expire(total_key, DAILY_COUNTER_EXPIRE_SECONDS)
 
-    subject, text, html = build_code_email(purpose, code, settings)
+    subject, text, html = content
     return EmailJob(
         email_log_id=email_log.id,
         to=email,

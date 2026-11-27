@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     email_verified_expire_seconds: int = Field(default=1800, gt=0)
     email_recipient_daily_limit: int = Field(default=10, gt=0)
     email_daily_send_limit: int = Field(default=250, gt=0)
+    find_id_phone_daily_limit: int = Field(default=5, gt=0)
+    find_id_ip_hourly_limit: int = Field(default=20, gt=0)
 
     @field_validator("jwt_secret_key")
     @classmethod
