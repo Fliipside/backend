@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -20,6 +20,8 @@ from app.schemas.auth import (
     EmailCodeRequest,
     EmailCodeSentResponse,
     EmailVerifiedResponse,
+    FindIdRequest,
+    FindIdResponse,
     LoginRequest,
     PasswordResetConfirmRequest,
     SignupRequest,
@@ -104,6 +106,29 @@ async def login(
 ) -> ApiResponse[TokenResponse]:
     token = await auth_service.login(session, request, settings)
     return ApiResponse[TokenResponse].ok(data=token)
+
+
+@router.post("/find-id", response_model=ApiResponse[FindIdResponse])
+async def find_id(
+    request: FindIdRequest,
+    http_request: Request,
+    background_tasks: BackgroundTasks,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    sessionmaker: Annotated[
+        async_sessionmaker[AsyncSession],
+        Depends(get_db_sessionmaker),
+    ],
+    redis: Annotated[Redis, Depends(get_redis)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> ApiResponse[FindIdResponse]:
+    client_ip = http_request.client.host if http_request.client else "unknown"
+    emails, jobs = await auth_service.find_id(
+        session, redis, request, client_ip, settings
+    )
+    for job in jobs:
+        background_tasks.add_task(email_code.deliver, sessionmaker, sender, job)
+    return ApiResponse[FindIdResponse].ok(data=FindIdResponse(emails=emails))
 
 
 @router.post(

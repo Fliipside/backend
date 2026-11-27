@@ -50,6 +50,24 @@ class User(Base):
         server_default="",
     )
 
+    # 아이디 찾기에 쓰는 본인 확인 값. 이 항목이 생기기 전에 가입한 사용자는
+    # 빈 문자열로 남아 아이디 찾기에 걸리지 않는다.
+    name: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="",
+        server_default="",
+    )
+
+    # 숫자만 저장한다. 예: 01012345678. 인증 없이 받는 값이라 중복을 허용한다.
+    phone: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="",
+        server_default="",
+        index=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
