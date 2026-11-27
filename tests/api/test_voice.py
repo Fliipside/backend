@@ -96,6 +96,8 @@ def auth_header(client: TestClient, email: str = "user@example.com") -> dict[str
             "email": email,
             "password": "password1234",
             "nickname": "tester",
+            "name": "홍길동",
+            "phone": "010-1234-5678",
             "company": "Flipside",
         },
     )

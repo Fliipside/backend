@@ -27,15 +27,43 @@ Password = Annotated[
 ]
 
 
+def normalize_phone(phone: str) -> str:
+    # 010-1234-5678, 010 1234 5678, 01012345678을 모두 받아 숫자만 남긴다.
+    digits = re.sub(r"[\s-]", "", phone)
+    if not re.fullmatch(r"01\d{8,9}", digits):
+        raise ValueError("phone must be a mobile number like 010-1234-5678")
+    return digits
+
+
+# 아이디 찾기에서 그대로 비교하므로 가입과 찾기에 같은 규칙을 쓴다.
+PersonName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=50),
+]
+Phone = Annotated[str, Field(max_length=20), AfterValidator(normalize_phone)]
+
+
 class SignupRequest(BaseModel):
     email: EmailStr
     password: Password
     nickname: str = Field(min_length=1, max_length=50)
-    # 아이디 찾기에서 이름과 함께 비교할 값이라 앞뒤 공백을 떼고 저장한다.
+    name: PersonName
+    phone: Phone
+    # 앞뒤 공백을 떼고 저장한다.
     company: Annotated[
         str,
         StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
     ]
+
+
+class FindIdRequest(BaseModel):
+    name: PersonName
+    phone: Phone
+
+
+class FindIdResponse(BaseModel):
+    # 일치하는 계정마다 가린 이메일 하나. 예: as********@gmail.com
+    emails: list[str]
 
 
 class EmailCodeRequest(BaseModel):
@@ -80,4 +108,6 @@ class UserResponse(BaseModel):
     id: UUID
     email: str
     nickname: str
+    name: str
+    phone: str
     company: str

@@ -15,6 +15,23 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def list_active_users_by_name_and_phone(
+        session: AsyncSession,
+        name: str,
+        phone: str,
+) -> list[User]:
+    result = await session.execute(
+        select(User)
+        .where(
+            User.name == name,
+            User.phone == phone,
+            User.is_active.is_(True),
+        )
+        .order_by(User.create_at)
+    )
+    return list(result.scalars())
+
+
 async def update_password_hash(
         session: AsyncSession,
         user: User,
@@ -30,12 +47,16 @@ async def create_user(
         email: str,
         password_hash: str,
         nickname: str,
+        name: str,
+        phone: str,
         company: str,
 ) -> User:
     user = User(
         email=email,
         password_hash=password_hash,
         nickname=nickname,
+        name=name,
+        phone=phone,
         company=company,
     )
     session.add(user)
