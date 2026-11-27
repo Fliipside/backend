@@ -182,6 +182,63 @@ python -m app.workers.voice_analysis
 - **목록**: 한 번에 전부 돌려줍니다. 검색, 페이지 나누기, 삭제 API는 아직 없습니다.
 
 
+## 실시간 통화 (LiveKit)
+
+사용자 간 음성·영상 통화는 자체 호스팅 [LiveKit](https://docs.livekit.io/home/self-hosting/deployment/) 서버를 거칩니다. backend는 미디어를 다루지 않고, 로그인한 사용자에게 방 입장용 토큰만 발급합니다.
+
+```text
+앱 → POST /api/v1/livekit/token  (room_name)
+       로그인 확인 → LIVEKIT_API_SECRET으로 서명한 토큰 발급 → 200 (url, token, room_name, identity, expires_in)
+앱 → 응답의 url(wss://...)과 token으로 LiveKit 서버에 직접 접속
+```
+
+- **방 이름**: 클라이언트가 정합니다. 영문, 숫자, `-`, `_`만 쓸 수 있고 128자까지입니다. 같은 `room_name`으로 토큰을 받은 사용자끼리 한 방에서 만나며, 방은 첫 입장 때 자동으로 생깁니다.
+- **⚠️ 입장 제한 없음**: 로그인한 사용자는 방 이름만 알면 어느 방이든 들어갈 수 있습니다. 누가 어느 방에 들어갈 수 있는지 확인하는 규칙은 아직 없으므로, 방 이름은 추측하기 어려운 값(UUID 등)으로 만들어야 합니다.
+- **참가자 정보**: `identity`는 사용자 id(UUID), 표시 이름은 닉네임입니다. 같은 사용자가 같은 방에 다시 들어가면 LiveKit이 먼저 있던 연결을 끊습니다.
+- **권한**: 발급한 토큰은 그 방 하나에만 입장할 수 있고, 발행·구독·데이터 전송을 모두 허용합니다.
+- **만료**: `LIVEKIT_TOKEN_EXPIRE_SECONDS`(기본 600초)는 토큰으로 입장할 수 있는 기한입니다. 입장한 뒤의 통화 시간은 제한하지 않습니다.
+- **설정**: `LIVEKIT_URL`(클라이언트가 접속할 `wss://` 주소), `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`(32바이트 이상)을 모두 채웁니다. 일부만 채우면 서버가 시작되지 않고, 모두 비우면 이 API만 `503 SERVICE_UNAVAILABLE`을 반환합니다. 키와 시크릿은 LiveKit 서버의 `LIVEKIT_KEYS`와 같은 값이어야 합니다.
+- **backend 웹소켓**: 두지 않습니다. 시그널링과 미디어는 클라이언트가 LiveKit 서버와 직접 주고받습니다. 상대에게 전화가 왔다고 알리는 기능은 여기에 없습니다.
+
+### LiveKit 서버 배포
+
+설정 파일은 [`deploy/livekit/livekit.yaml`](deploy/livekit/livekit.yaml)이며 서버의 `~/flipside/livekit/livekit.yaml`에 둡니다. 키와 시크릿은 설정 파일에 적지 않고 서버의 `~/flipside/.env`에 `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`으로 둡니다. 서버 compose에는 아래 서비스가 있어야 합니다.
+
+```yaml
+  livekit:
+    image: livekit/livekit-server:v1.13.11
+    container_name: flipside-livekit
+    command: ["--config", "/etc/livekit.yaml"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7880:7880"   # 시그널링. 외부 요청은 프록시로만 들어온다.
+      - "7881:7881/tcp"         # 미디어(TCP 우회)
+      - "7882:7882/udp"         # 미디어(UDP)
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+```
+
+| 포트 | 용도 | 외부 공개 |
+| --- | --- | --- |
+| 7880/TCP | 시그널링(HTTP/WebSocket) | 열지 않음. nginx가 443에서 TLS를 종료하고 `127.0.0.1:7880`으로 넘김 |
+| 7881/TCP | UDP가 막힌 망의 미디어 우회 경로 | 열어야 함 |
+| 7882/UDP | 미디어 | 열어야 함 |
+
+- **프록시**: 시그널링은 `wss://`여야 하므로 LiveKit용 서브도메인 `livekit.flipside.o-r.kr`(DNS A 레코드)과 인증서가 필요합니다. 서버 호스트 nginx에 [`deploy/nginx/livekit.conf`](deploy/nginx/livekit.conf)를 API용 설정과 별도로 추가합니다. 이 설정은 `Upgrade`/`Connection` 헤더를 넘기고 `proxy_read_timeout`을 1시간으로 둡니다. 이 값이 짧으면 통화 중 조용한 시그널링 연결을 nginx가 끊습니다.
+
+  ```bash
+  sudo certbot certonly --nginx -d livekit.flipside.o-r.kr
+  sudo cp livekit.conf /etc/nginx/sites-available/livekit.conf
+  sudo ln -s /etc/nginx/sites-available/livekit.conf /etc/nginx/sites-enabled/livekit.conf
+  sudo nginx -t && sudo systemctl reload nginx
+  ```
+
+- **backend 설정**: 서버 compose의 backend는 `env_file: .env`로 서버 `.env`를 읽습니다. 서버 `.env`에 `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`이 있으므로 `LIVEKIT_URL=wss://livekit.flipside.o-r.kr`도 함께 있어야 합니다. 없으면 이 API가 들어간 이미지가 배포될 때 backend가 시작되지 않습니다.
+- **LiveKit 설정 변경**: CI는 LiveKit과 nginx 설정을 배포하지 않습니다. 설정 파일을 고치면 서버에 직접 복사한 뒤 `docker compose up -d --force-recreate livekit`으로 반영합니다. 진행 중인 통화는 끊깁니다.
+- **TURN**: 쓰지 않습니다. 443 외 포트가 모두 막힌 망에서는 접속하지 못합니다.
+
 ## 로컬 실행
 
 Python **3.11.x**에서 `backend` 디렉터리로 이동한 뒤:
@@ -224,6 +281,7 @@ uvicorn app.main:app --reload
 | `POST /api/v1/images`             | 이미지 업로드, 201 (multipart `file`, 인증 필요) |
 | `GET /api/v1/images/{image_id}`   | 이미지 정보와 서명 URL 조회 (본인 것만) |
 | `DELETE /api/v1/images/{image_id}` | 이미지 삭제 (본인 것만)              |
+| `POST /api/v1/livekit/token`     | 통화 방 입장용 LiveKit 토큰 발급 (`room_name` 필수, 인증 필요) |
 | `POST /api/v1/customers`          | 고객 등록, 201 (`company_name`, `name` 필수, 인증 필요) |
 | `GET /api/v1/customers`           | 내가 등록한 고객 목록, 최근 등록 순   |
 | `GET /api/v1/customers/{customer_id}` | 고객 단건 조회 (본인 것만)        |
