@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, customer, emotion, image, relationship, voice
+from app.api.v1 import auth, customer, emotion, image, livekit, relationship, voice
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(voice.router, prefix="/voice", tags=["voice"])
 router.include_router(image.router, prefix="/images", tags=["images"])
 router.include_router(customer.router, prefix="/customers", tags=["customers"])
+router.include_router(livekit.router, prefix="/livekit", tags=["livekit"])
 router.include_router(emotion.router, prefix="/emotion", tags=["emotion"])
 router.include_router(relationship.router, prefix="/relationship", tags=["relationship"])

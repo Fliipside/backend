@@ -96,3 +96,42 @@ def test_settings_ai_memory_timeout_defaults(monkeypatch: MonkeyPatch) -> None:
 
     assert settings.ai_extract_timeout_seconds == 540.0
     assert settings.ai_ask_timeout_seconds == 300.0
+
+
+LIVEKIT_SECRET = "test-livekit-secret-with-enough-length-1234"
+
+
+def test_settings_rejects_partial_livekit_configuration() -> None:
+    with pytest.raises(ValidationError, match="LIVEKIT_URL, LIVEKIT_API_SECRET"):
+        Settings(
+            livekit_url="",
+            livekit_api_key="APItestkey",
+            livekit_api_secret="",
+        )
+
+
+def test_settings_rejects_short_livekit_api_secret() -> None:
+    with pytest.raises(ValidationError, match="LIVEKIT_API_SECRET must be at least"):
+        Settings(
+            livekit_url="wss://livekit.example.com",
+            livekit_api_key="APItestkey",
+            livekit_api_secret="a" * 31,
+        )
+
+
+def test_settings_livekit_configured_only_when_all_values_are_set() -> None:
+    unconfigured = Settings(
+        livekit_url="",
+        livekit_api_key="",
+        livekit_api_secret="",
+    )
+    assert unconfigured.livekit_configured is False
+
+    settings = Settings(
+        livekit_url="wss://livekit.example.com",
+        livekit_api_key="APItestkey",
+        livekit_api_secret=LIVEKIT_SECRET,
+    )
+
+    assert settings.livekit_configured is True
+    assert settings.livekit_token_expire_seconds == 600
