@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     email_verified_expire_seconds: int = Field(default=1800, gt=0)
     email_recipient_daily_limit: int = Field(default=10, gt=0)
     email_daily_send_limit: int = Field(default=250, gt=0)
+    livekit_url: str = ""
+    livekit_api_key: str = ""
+    livekit_api_secret: SecretStr = SecretStr("")
+    livekit_token_expire_seconds: int = Field(default=600, gt=0)
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -117,6 +121,28 @@ class Settings(BaseSettings):
                 f"Incomplete SMTP configuration: {', '.join(missing)}"
             )
         return self
+
+    @model_validator(mode="after")
+    def validate_livekit_settings(self) -> Self:
+        secret = self.livekit_api_secret.get_secret_value()
+        values = {
+            "LIVEKIT_URL": self.livekit_url,
+            "LIVEKIT_API_KEY": self.livekit_api_key,
+            "LIVEKIT_API_SECRET": secret,
+        }
+
+        if any(values.values()) and not all(values.values()):
+            missing = [name for name, value in values.items() if not value]
+            raise ValueError(
+                f"Incomplete LiveKit configuration: {', '.join(missing)}"
+            )
+        if secret and len(secret.encode("utf-8")) < 32:
+            raise ValueError("LIVEKIT_API_SECRET must be at least 32 bytes")
+        return self
+
+    @property
+    def livekit_configured(self) -> bool:
+        return bool(self.livekit_api_key)
 
     @property
     def s3_configured(self) -> bool:
